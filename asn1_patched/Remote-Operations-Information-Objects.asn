@@ -1,0 +1,11 @@
+Remote-Operations-Information-Objects {joint-iso-itu-t remote-operations(4)
+  informationObjects(5) version1(0)} DEFINITIONS IMPLICIT TAGS ::=
+BEGIN
+
+-- Minimal stub: CLASS/WITH SYNTAX removed for asn1tools
+-- (emptyBind/emptyUnbind import removed; not needed for BER decoding)
+
+Code ::= CHOICE { local INTEGER, global OBJECT IDENTIFIER }
+Priority ::= INTEGER (0..MAX)
+
+END

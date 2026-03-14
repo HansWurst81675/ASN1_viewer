@@ -1,0 +1,33 @@
+Remote-Operations-Generic-ROS-PDUs {joint-iso-itu-t remote-operations(4)
+  generic-ROS-PDUs(6) version1(0)} DEFINITIONS IMPLICIT TAGS ::=
+BEGIN
+
+IMPORTS
+  Code
+    FROM Remote-Operations-Information-Objects {joint-iso-itu-t
+      remote-operations(4) informationObjects(5) version1(0)};
+
+-- Minimal stub: parameterised types removed
+InvokeId ::= CHOICE { present INTEGER, absent NULL }
+GeneralProblem ::= INTEGER {
+  unrecognizedPDU(0), mistypedPDU(1), badlyStructuredPDU(2)}
+InvokeProblem ::= INTEGER {
+  duplicateInvocation(0), unrecognizedOperation(1), mistypedArgument(2),
+  resourceLimitation(3), releaseInProgress(4), unrecognizedLinkedId(5),
+  linkedResponseUnexpected(6), unexpectedLinkedOperation(7)}
+ReturnResultProblem ::= INTEGER {
+  unrecognizedInvocation(0), resultResponseUnexpected(1), mistypedResult(2)}
+ReturnErrorProblem ::= INTEGER {
+  unrecognizedInvocation(0), errorResponseUnexpected(1), unrecognizedError(2),
+  unexpectedError(3), mistypedParameter(4)}
+RejectProblem ::= INTEGER {
+  general-unrecognizedPDU(0), general-mistypedPDU(1), general-badlyStructuredPDU(2),
+  invoke-duplicateInvocation(10), invoke-unrecognizedOperation(11), invoke-mistypedArgument(12),
+  invoke-resourceLimitation(13), invoke-releaseInProgress(14), invoke-unrecognizedLinkedId(15),
+  invoke-linkedResponseUnexpected(16), invoke-unexpectedLinkedOperation(17),
+  returnResult-unrecognizedInvocation(20), returnResult-resultResponseUnexpected(21),
+  returnResult-mistypedResult(22), returnError-unrecognizedInvocation(30),
+  returnError-errorResponseUnexpected(31), returnError-unrecognizedError(32),
+  returnError-unexpectedError(33), returnError-mistypedParameter(34)}
+
+END

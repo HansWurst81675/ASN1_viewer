@@ -1,0 +1,309 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:          #1a1d23;
+  --bg-panel:    #21252e;
+  --bg-alt:      #262b35;
+  --bg-row-even: #1e2229;
+  --border:      #2e3340;
+  --text:        #d4d8e0;
+  --text-dim:    #6b7486;
+  --text-muted:  #454d5e;
+  --accent:      #4a9eff;
+  --green:       #98c379;
+  --yellow:      #e5c07b;
+  --teal:        #56b6c2;
+  --sel-bg:      #1f3050;
+  --sel-border:  #4a9eff;
+}
+
+html { height: 100%; }
+
+body {
+  height: 100%;
+  margin: 0; padding: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Consolas','JetBrains Mono','Cascadia Code','Courier New',monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  user-select: none;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Toolbar ──────────────────────────────────────────────────────────────── */
+#toolbar {
+  height: 40px;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  -webkit-app-region: drag;
+}
+#toolbar > * { -webkit-app-region: no-drag; }
+
+/* ── Main area ────────────────────────────────────────────────────────────── */
+#main-area {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  /* explicit height so children can compute % heights */
+  min-height: 0;
+}
+
+/* ── Status bar ───────────────────────────────────────────────────────────── */
+#statusbar {
+  height: 24px;
+  min-height: 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 10px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* ── Drop overlay ─────────────────────────────────────────────────────────── */
+#drop-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  z-index: 10;
+}
+#drop-overlay.hidden      { display: none; }
+#drop-overlay.drop-active { background: var(--sel-bg); }
+
+.drop-icon  { font-size: 56px; color: var(--border); margin-bottom: 16px; }
+.drop-title { font-size: 18px; color: var(--text-dim); margin-bottom: 8px; }
+.drop-hint  { font-size: 13px; color: var(--text-muted); }
+.drop-hint strong { color: var(--accent); }
+.drop-ext   { font-size: 11px; color: var(--text-muted); margin-top: 12px; letter-spacing: 2px; }
+
+/* ── Splitter container ───────────────────────────────────────────────────── */
+#splitter-container {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  display: flex;
+  flex-direction: row;
+}
+#splitter-container.hidden { display: none; }
+
+/* ── Tree panel ───────────────────────────────────────────────────────────── */
+#tree-panel {
+  width: 780px;
+  min-width: 200px;
+  max-width: 85%;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  /* DO NOT set overflow here — tree-body handles it */
+}
+
+#tree-header {
+  height: 28px;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: 0 4px;
+}
+
+.th-col {
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 0 4px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* tree-body: takes remaining height, scrolls */
+#tree-body {
+  flex: 1;
+  overflow-y: scroll;
+  overflow-x: auto;
+  /* must have a measurable height for rows to appear */
+  min-height: 0;
+}
+
+/* ── Tree rows ────────────────────────────────────────────────────────────── */
+.col-offset { width: 68px;  flex-shrink: 0; }
+.col-tag    { width: 90px;  flex-shrink: 0; }
+.col-name   { width: 260px; flex-shrink: 0; }
+.col-value  { flex: 1; min-width: 100px; overflow: hidden; text-overflow: ellipsis; }
+.col-size   { width: 52px;  flex-shrink: 0; text-align: right; padding-right: 6px; }
+
+.tree-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  height: 21px;
+  width: 100%;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tree-row:nth-child(odd)  { background: var(--bg-panel); }
+.tree-row:nth-child(even) { background: var(--bg-row-even); }
+.tree-row:hover           { background: var(--bg-alt); }
+.tree-row.selected {
+  background: var(--sel-bg) !important;
+  border-left: 2px solid var(--sel-border);
+}
+.tree-row.search-match { background: rgba(229,192,123,.1) !important; }
+
+.row-indent {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+.expand-arrow {
+  display: inline-block;
+  width: 14px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 9px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.expand-arrow.leaf { color: transparent; cursor: default; }
+
+.tree-row .col-offset { color: var(--teal);     font-size: 11px; }
+.tree-row .col-tag    { color: var(--yellow); }
+.tree-row .col-tag.univ { color: var(--text-dim); }
+.tree-row .col-name   { color: var(--accent); }
+.tree-row .col-value  { color: var(--green); }
+.tree-row .col-value.dim { color: var(--text-dim); }
+.tree-row .col-size   { color: var(--text-muted); font-size: 11px; }
+
+/* ── Resize handle ────────────────────────────────────────────────────────── */
+#resize-handle {
+  width: 4px;
+  flex-shrink: 0;
+  background: var(--border);
+  cursor: col-resize;
+}
+#resize-handle:hover,
+#resize-handle.dragging { background: var(--accent); }
+
+/* ── Detail panel ─────────────────────────────────────────────────────────── */
+#detail-panel {
+  flex: 1;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#detail-infobar {
+  min-height: 28px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: 5px 12px;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+
+.detail-section-label {
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  padding: 5px 12px 2px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+#detail-value {
+  background: var(--bg-alt);
+  border-bottom: 1px solid var(--border);
+  padding: 7px 12px;
+  color: var(--green);
+  font-size: 13px;
+  min-height: 36px;
+  max-height: 100px;
+  overflow-y: auto;
+  word-break: break-all;
+  white-space: pre-wrap;
+  flex-shrink: 0;
+}
+
+#detail-hex {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 12px;
+  background: var(--bg-panel);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.hex-line   { display: flex; gap: 8px; }
+.hex-offset { color: var(--teal);     min-width: 52px; }
+.hex-bytes  { color: var(--text-dim); min-width: 300px; }
+.hex-ascii  { color: var(--green); }
+
+/* ── Toolbar buttons ──────────────────────────────────────────────────────── */
+button { cursor: pointer; border: none; outline: none; }
+
+.btn-primary {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 14px;
+  background: var(--accent); color: #fff;
+  font-family: inherit; font-size: 12px; font-weight: 700;
+  border-radius: 5px;
+}
+.btn-primary:hover { background: #5aadff; }
+.btn-primary .icon { font-size: 14px; }
+
+.btn-tool {
+  padding: 4px 10px;
+  background: transparent; color: var(--text);
+  font-family: inherit; font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+}
+.btn-tool:hover { background: var(--bg-alt); border-color: var(--border); }
+
+.toolbar-sep  { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
+.toolbar-flex { flex: 1; }
+
+#search-wrap { display: flex; align-items: center; gap: 2px; }
+#search-input {
+  width: 200px; height: 28px; padding: 0 10px;
+  background: var(--bg-alt); border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text); font-family: inherit; font-size: 12px; outline: none;
+}
+#search-input:focus        { border-color: var(--accent); }
+#search-input::placeholder { color: var(--text-muted); }
+
+#file-info {
+  color: var(--text-dim); font-size: 11px; padding-right: 4px;
+  max-width: 400px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ── Scrollbars ───────────────────────────────────────────────────────────── */
+::-webkit-scrollbar              { width: 7px; height: 7px; }
+::-webkit-scrollbar-track        { background: transparent; }
+::-webkit-scrollbar-thumb        { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover  { background: var(--text-muted); }
+
+/* ── Utility ──────────────────────────────────────────────────────────────── */
+/* NOTE: no !important on .hidden so style.display can override */
+.hidden  { display: none; }
+.visible { display: flex; }

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+<title>BER Viewer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ── Toolbar ──────────────────────────────────────────────────────────────── -->
+<div id="toolbar">
+  <button id="btn-open" class="btn-primary" title="Open file (Ctrl+O)">
+    <span class="icon">⊕</span> Open
+  </button>
+  <div class="toolbar-sep"></div>
+  <button id="btn-expand"   class="btn-tool" title="Expand all (Ctrl+E)">⊞ Expand</button>
+  <button id="btn-collapse" class="btn-tool" title="Collapse all (Ctrl+W)">⊟ Collapse</button>
+  <div class="toolbar-sep"></div>
+  <div id="search-wrap">
+    <input id="search-input" type="text" placeholder="Search field / value…" spellcheck="false">
+    <button id="btn-search" class="btn-tool" title="Find next (F3)">⌕</button>
+  </div>
+  <div class="toolbar-flex"></div>
+  <div id="file-info">No file loaded</div>
+</div>
+
+<!-- ── Main area ─────────────────────────────────────────────────────────────── -->
+<div id="main-area">
+
+  <!-- Drop overlay (shown when no file) -->
+  <div id="drop-overlay" class="visible">
+    <div class="drop-icon">⬇</div>
+    <div class="drop-title">Drop a BER file here</div>
+    <div class="drop-hint">or click <strong>Open</strong> in the toolbar</div>
+    <div class="drop-ext">*.hi2  ·  *.ber</div>
+  </div>
+
+  <!-- Splitter layout -->
+  <div id="splitter-container" class="hidden">
+
+    <!-- Left: tree panel -->
+    <div id="tree-panel">
+      <div id="tree-header">
+        <span class="th-col col-offset">Offset</span>
+        <span class="th-col col-tag">Tag</span>
+        <span class="th-col col-name">Field / Type</span>
+        <span class="th-col col-value">Value</span>
+        <span class="th-col col-size">Size</span>
+      </div>
+      <div id="tree-body"></div>
+    </div>
+
+    <!-- Resize handle -->
+    <div id="resize-handle"></div>
+
+    <!-- Right: detail panel -->
+    <div id="detail-panel">
+      <div id="detail-infobar">Select a field to inspect</div>
+
+      <div class="detail-section-label">DECODED VALUE</div>
+      <div id="detail-value"></div>
+
+      <div class="detail-section-label">HEX DUMP</div>
+      <div id="detail-hex"></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Status bar -->
+<div id="statusbar">
+  <span id="status-left">Ready</span>
+  <span id="status-right"></span>
+</div>
+
+<script src="renderer.js"></script>
+</body>
+</html>

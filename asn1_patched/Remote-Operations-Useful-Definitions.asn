@@ -1,0 +1,10 @@
+Remote-Operations-Useful-Definitions {joint-iso-itu-t remote-operations(4)
+  useful-definitions(7) version1(0)} DEFINITIONS IMPLICIT TAGS ::=
+BEGIN
+
+-- Minimal stub: all parameterised/CLASS content removed for asn1tools
+
+EmptyBindType   ::= NULL
+EmptyUnbindType ::= NULL
+
+END
