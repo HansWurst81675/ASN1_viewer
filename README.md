@@ -44,16 +44,63 @@ npm run build:win
 → Ergebnis in `dist/`:
 - `BER Viewer Setup 1.0.0.exe`  (NSIS Installer)
 
-## Linux AppImage bauen
+## Linux AppImage bauen (Ubuntu / Linux Mint)
+
+### 1. Node.js installieren
 
 ```bash
-cd ber_viewer
+# Node.js 20 LTS via NodeSource
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+
+# Versionen prüfen
+node --version   # sollte v20.x.x zeigen
+npm --version
+```
+
+### 2. Abhängigkeiten für electron-builder
+
+```bash
+# Benötigt für NSIS und AppImage-Builds unter Linux
+sudo apt install -y \
+    libgconf-2-4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libgdk-pixbuf2.0-0 \
+    libgtk-3-0 \
+    libgbm-dev \
+    libnss3 \
+    libasound2 \
+    fuse \
+    libfuse2
+```
+
+### 3. AppImage bauen
+
+```bash
+cd ber_viewer_electron
 npm install
 npm run build:linux
 ```
 
 → Ergebnis in `dist/`:
 - `BER Viewer-1.0.0.AppImage`
+
+### 4. AppImage starten
+
+```bash
+chmod +x "dist/BER Viewer-1.0.0.AppImage"
+./"dist/BER Viewer-1.0.0.AppImage"
+```
+
+Oder per Doppelklick im Dateimanager (Ausführungsrecht muss gesetzt sein).
+
+> **Hinweis:** Falls AppImage nicht startet mit Fehler `FUSE`:
+> ```bash
+> sudo apt install libfuse2
+> # oder AppImage mit --no-sandbox starten:
+> ./"dist/BER Viewer-1.0.0.AppImage" --no-sandbox
+> ```
 
 ## Hinweise
 
