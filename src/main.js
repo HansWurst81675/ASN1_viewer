@@ -386,6 +386,9 @@ const EXTRA_HINTS = {
   // Other IRIContents CHOICE members
   'UMTSIRI,0':                  'UmtsIRI-Parameters',
   'UMTSIRI,1':                  'UmtsIRIsContent',
+  // IP address inner encoding (LI-PS-PDU IP-value)
+  'IPv6Address,1':              'iPBinaryAddress',
+  'IPv4Address,1':              'iPBinaryAddress',
   // EPS-GTPV2-SpecificParameters[23] = ePSlocationOfTheTarget :: EPSLocation
   'EPS-GTPV2-SpecificParameters,23': 'EPSLocation',
   // IPMMIRI SIPMessage chain (4G uses [0][1][2], TS33128 5G uses [1][2][3])
