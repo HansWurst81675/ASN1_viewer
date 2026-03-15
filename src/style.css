@@ -371,3 +371,26 @@ button { cursor: pointer; border: none; outline: none; }
 #edit-ok:hover { background: #5aadff; }
 
 #edit-error { color: var(--red, #e06c75); font-size: 11px; min-height: 16px; }
+
+/* ── Context menu ─────────────────────────────────────────────────────────── */
+#ctx-menu {
+  position: fixed;
+  z-index: 2000;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 0;
+  min-width: 180px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.5);
+}
+.ctx-item {
+  padding: 6px 16px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.ctx-item:hover {
+  background: var(--sel-bg);
+  color: var(--accent);
+}

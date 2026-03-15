@@ -42,6 +42,7 @@ function buildTagMaps(asn1Dir) {
   if (!asn1Dir || !fs.existsSync(asn1Dir)) return maps;
   const files = fs.readdirSync(asn1Dir).filter(f => f.endsWith('.asn') || f.endsWith('.asn1')).sort();
   const fieldRe = /\b([a-z][A-Za-z0-9-]*)\s+\[(\d+)\]\s+(?:IMPLICIT\s+|OPTIONAL\s+)?([A-Z][A-Za-z0-9-]*)/;
+
   for (const fname of files) {
     const content = fs.readFileSync(path.join(asn1Dir, fname), 'utf8');
     const typePattern = /^([A-Z][A-Za-z0-9-]+)\s*::=\s*(?:SEQUENCE|SET|CHOICE)\s*\{/gm;
@@ -56,16 +57,42 @@ function buildTagMaps(asn1Dir) {
       }
       const body = content.slice(bodyStart, i - 1);
       const tmap = {};
-      for (const line of body.split('\n')) {
-        const code = line.replace(/--.*/, '');
-        const fm = fieldRe.exec(code);
-        if (fm) tmap[parseInt(fm[2])] = [fm[1], fm[3]];
+      // Only parse TOP-LEVEL fields (depth=0) — emit line at '{' and '\n',
+      // reset lineStart when entering/leaving nested blocks
+      let d = 0, lineStart = 0;
+      for (let j = 0; j <= body.length; j++) {
+        const ch = j < body.length ? body[j] : null;
+        if (ch === '{') {
+          if (d === 0) {  // emit line before entering block
+            const line = body.slice(lineStart, j).replace(/--.*/, '');
+            const fm = fieldRe.exec(line);
+            if (fm) tmap[parseInt(fm[2])] = [fm[1], fm[3]];
+          }
+          d++; lineStart = j + 1; continue;
+        }
+        if (ch === '}') {
+          d--;
+          if (d === 0) lineStart = j + 1;  // reset after block
+          continue;
+        }
+        if ((ch === '\n' || ch === null) && d === 0) {
+          const line = body.slice(lineStart, j).replace(/--.*/, '');
+          const fm = fieldRe.exec(line);
+          if (fm) tmap[parseInt(fm[2])] = [fm[1], fm[3]];
+          lineStart = j + 1;
+        }
       }
+
       if (Object.keys(tmap).length === 0) continue;
       if (tname === 'IRIPayload' && tmap[0]) maps['LIPSIRIPayload'] = tmap;
+      // SIPMessage exists in both IPMultimediaPDU (4G: [0][1][2]) and TS33128 (5G: [1][2][3])
+      // Keep 4G version as 'SIPMessage4G', let TS33128 version stay as 'SIPMessage'
+      else if (tname === 'SIPMessage' && tmap[0]) maps['SIPMessage4G'] = tmap;
       else maps[tname] = tmap;
     }
   }
+
+  // Hardcoded IRIContents CHOICE tags
   maps['IRIContents'] = {
     1:['emailIRI','EmailIRI'], 2:['iPIRI','IPIRI'], 3:['iPIRIOnly','IPIRIOnly'],
     4:['uMTSIRI','UMTSIRI'], 5:['eTSI671IRI','ETSI671IRI'], 6:['l2IRI','L2IRI'],
@@ -75,6 +102,47 @@ function buildTagMaps(asn1Dir) {
     16:['confIRI','ConfIRI'], 17:['proseIRI','ProSeIRI'], 18:['gcseIRI','GcseIRI'],
     19:['threeGPP33128DefinedIRI','XIRIPayload'], 20:['iPIRIPacketReport','IPIRIPacketReport'],
   };
+
+  // Virtual types for inline SEQUENCE bodies that share a common tag number
+  // across multiple ASN.1 versions (EPS, UMTS, HI2)
+  maps['EpsPartyIdentity'] = {
+    1:['imei','OCTET'], 3:['imsi','OCTET'], 6:['msISDN','OCTET'],
+    7:['e164-Format','OCTET'], 8:['sip-uri','OCTET'], 9:['tel-uri','OCTET'],
+    10:['nai','OCTET'], 11:['x-3GPP-Asserted-Identity','OCTET'], 13:['iMPI','OCTET'],
+  };
+  maps['UmtsPartyIdentity'] = {
+    1:['imei','OCTET'], 2:['tei','OCTET'], 3:['imsi','OCTET'],
+    4:['callingPartyNumber','OCTET'], 5:['calledPartyNumber','OCTET'],
+    6:['msISDN','OCTET'], 7:['e164-Format','OCTET'], 8:['sip-uri','OCTET'],
+  };
+
+  maps['GsmGeoCoordinates'] = {
+    1:['latitude','PrintableString'], 2:['longitude','PrintableString'],
+    3:['mapDatum','MapDatum'], 4:['azimuth','INTEGER'],
+  };
+  maps['UtmCoordinates'] = {
+    1:['utm-East','PrintableString'], 2:['utm-North','PrintableString'],
+    3:['utm-AltitudeAboveWGS84Ellipsoid','PrintableString'],
+  };
+
+  maps['SmsContents'] = {
+    1:['initiator',       'ENUMERATED'],
+    2:['transfer-status', 'ENUMERATED'],
+    3:['other-message',   'ENUMERATED'],
+    4:['content',         'OCTET'],
+    5:['national-SM-Content', 'OCTET'],
+  };
+
+  // IPMultimediaPDU Location (from LI-PS-PDU, not TS33128)
+  // Used by IPMMIRI targetLocation
+  maps['IPMMIRILocation'] = {
+    0:['umtsHI2Location',   'UmtsHI2Location'],
+    1:['epsLocation',       'EPSLocation'],
+    2:['wlanLocation',      'WlanLocationAttributes'],
+    3:['eTSI671HI2Location','ETSI671HI2Location'],
+    4:['userLocation',      'UserLocation'],
+  };
+
   return maps;
 }
 
@@ -216,6 +284,22 @@ function scalarValue(cls, tag, raw, fieldName, origChildType) {
     if (label) return `${label} ( ${v}, 0x${v.toString(16)} )`;
   }
 
+  // Context-tagged INTEGER
+  if (cls === 2 && origChildType === 'INTEGER') {
+    try {
+      let v = 0n;
+      for (const b of raw) v = (v << 8n) | BigInt(b);
+      if (raw[0] & 0x80) v -= (1n << BigInt(raw.length * 8));
+      const vn = Number(v);
+      // seconds field: show as Unix timestamp + human-readable date
+      if (fieldName === 'seconds' && vn > 1000000000 && vn < 2000000000) {
+        const d = new Date(vn * 1000);
+        return `${d.toISOString().replace('T',' ').replace('.000Z','Z')}  (${vn}, 0x${vn.toString(16)})`;
+      }
+      return `${vn},  0x${vn.toString(16)}`;
+    } catch { /* fall through */ }
+  }
+
   // Context-tagged GeneralizedTime / UTCTime
   if (cls === 2 && (origChildType === 'GeneralizedTime' || origChildType === 'UTCTime')) {
     const s = Buffer.from(raw).toString('utf8');
@@ -268,17 +352,49 @@ function tagLabel(cls,tag){
 
 const EXTRA_HINTS = {
   // 5G IRI chain
-  'Payload,0':          'iRIPayloadSEQ',
-  'LIPSIRIPayload,2':   'IRIContents',
-  'IRIContents,19':     'XIRIPayload',
-  'XIRIPayload,2':      'XIRIEvent',
+  'Payload,0':                  'iRIPayloadSEQ',
+  'LIPSIRIPayload,2':           'IRIContents',
+  'IRIContents,19':             'XIRIPayload',
+  'XIRIPayload,2':              'XIRIEvent',
   // CC payload chain (4G messaging, VoIP)
-  'Payload,1':          'cCPayloadSEQ',
-  // UmtsCS chain
-  'UmtsCS-IRIsContent,0': 'UmtsCS-IRIContent',
-  // MicroSecondTimeStamp
-  'MicroSecondTimeStamp,0': 'seconds-INTEGER',
-  'MicroSecondTimeStamp,1': 'microSeconds-INTEGER',
+  'Payload,1':                  'cCPayloadSEQ',
+  // UmtsCS chain - files starting with [0..4] context tag
+  'UmtsCS-IRIsContent,0':       'UmtsCS-IRIContent',
+  'UmtsCS-IRIContent,1':        'UmtsCS-IRI-Parameters',
+  'UmtsCS-IRIContent,2':        'UmtsCS-IRI-Parameters',
+  'UmtsCS-IRIContent,3':        'UmtsCS-IRI-Parameters',
+  'UmtsCS-IRIContent,4':        'UmtsCS-IRI-Parameters',
+  // extendedInterceptionPointID (PSHeader[9]) contains a SET OF PartyInformation
+  'PSHeader,9':                 'PartyInformationSEQ',
+  // EPSIRI chain (Not5G / EPS)
+  'EPSIRI,0':                   'EpsIRI-Parameters',
+  'EPSIRI,1':                   'EpsIRIContent',
+  'EpsIRIContent,1':            'EpsIRI-Parameters',
+  'EpsIRIContent,2':            'EpsIRI-Parameters',
+  'EpsIRIContent,3':            'EpsIRI-Parameters',
+  'EpsIRIContent,4':            'EpsIRI-Parameters',
+  // partyInformation SET OF PartyInformation (EPS, UMTS, UmtsCS)
+  'EpsIRI-Parameters,9':        'PartyInformationSEQ',
+  'UmtsCS-IRI-Parameters,9':    'PartyInformationSEQ',
+  'IRI-Parameters,9':           'PartyInformationSEQ',
+  // PartyInformation partyIdentity inline SEQUENCE
+  'PartyInformation,1':         'EpsPartyIdentity',
+  'Party-Information,1':        'UmtsPartyIdentity',
+  // GSMLocation geoCoordinates inline SEQUENCE
+  'GSMLocation,1':              'GsmGeoCoordinates',
+  'GSMLocation,2':              'UtmCoordinates',
+  // Other IRIContents CHOICE members
+  'UMTSIRI,0':                  'UmtsIRI-Parameters',
+  'UMTSIRI,1':                  'UmtsIRIsContent',
+  // EPS-GTPV2-SpecificParameters[23] = ePSlocationOfTheTarget :: EPSLocation
+  'EPS-GTPV2-SpecificParameters,23': 'EPSLocation',
+  // IPMMIRI SIPMessage chain (4G uses [0][1][2], TS33128 5G uses [1][2][3])
+  'IPIRIContents,1':            'SIPMessage4G',
+  'IPIRIContents,6':            'SIPMessage4G',
+  // IPMMIRI targetLocation uses LI-PS-PDU Location, not TS33128 Location
+  'IPMMIRI,2':                  'IPMMIRILocation',
+  // SMS-report sMS-Contents inline SEQUENCE
+  'SMS-report,3':               'SmsContents',
 };
 
 const GENERIC_TYPES = new Set(['SEQUENCE','SET','CHOICE','OCTET','OBJECT','INTEGER','BOOLEAN',
@@ -309,20 +425,47 @@ function parseBer(buf, baseOffset, typeHint, tagMaps, depth) {
           if(GENERIC_TYPES.has(childType)) childType=null;
         }
       }
+      // PSHeader has an extension marker (...) — unknown tags fall through to EpsIRI-Parameters
+      // This handles EPS files where IRI parameters are embedded directly in PSHeader
+      if(!node.fieldName && typeHint==='PSHeader' && tagMaps['EpsIRI-Parameters']) {
+        const epsEntry = tagMaps['EpsIRI-Parameters'][t.tag];
+        if(epsEntry){
+          node.fieldName=epsEntry[0]; childType=epsEntry[1];
+          node.typeName=childType; node.origChildType=childType;
+          if(GENERIC_TYPES.has(childType)) childType=null;
+        }
+      }
       const override=EXTRA_HINTS[`${typeHint},${t.tag}`];
       if(override){childType=override;node.typeName=override;}
     }else if(t.cls===0){node.typeName=UNIV[t.tag]||`UNIV-${t.tag}`;}
 
     let recurseHint=childType;
     if(t.cls===0&&t.tag===16){
-      if(typeHint==='iRIPayloadSEQ')       recurseHint='LIPSIRIPayload';
-      else if(typeHint==='cCPayloadSEQ')   recurseHint='CCPayload';
-      else if(childType)                    recurseHint=childType;
-      else                                  recurseHint=typeHint;
-    }else if(t.cls===0&&t.tag===17){recurseHint=childType||typeHint;}
+      // UNIVERSAL SEQUENCE
+      if     (typeHint==='iRIPayloadSEQ')         recurseHint='LIPSIRIPayload';
+      else if(typeHint==='cCPayloadSEQ')           recurseHint='CCPayload';
+      else if(typeHint==='PartyInformationSEQ')    recurseHint='PartyInformation';
+      else if(childType)                            recurseHint=childType;
+      else                                          recurseHint=typeHint;
+    }else if(t.cls===0&&t.tag===17){
+      // UNIVERSAL SET
+      if(typeHint==='PartyInformationSEQ') recurseHint='PartyInformation';
+      else recurseHint=childType||typeHint;
+    }
 
-    if(t.cons) node.children=parseBer(raw,baseOffset+l.pos,recurseHint,tagMaps,depth+1);
-    else if(looksLikeBer(raw)&&depth<8) node.children=parseBer(raw,baseOffset+l.pos,childType,tagMaps,depth+1);
+    // String/simple types that are BER-encoded as constructed should still decode as scalar
+    // Only apply forceScalar based on origChildType, NOT fieldName
+    // (fieldName regex was too broad: matched 'communicationIdentifier', 'extendedInterceptionPointID' etc.)
+    const STRING_TYPES = new Set(['PrintableString','IA5String','UTF8String','VisibleString',
+      'BMPString','GeneralizedTime','UTCTime','LawfulInterceptionIdentifier']);
+    const forceScalar = t.cls===2 && t.cons && STRING_TYPES.has(node.origChildType);
+
+    if(t.cons && !forceScalar){
+      node.children=parseBer(raw,baseOffset+l.pos,recurseHint,tagMaps,depth+1);
+    } else if(!forceScalar && looksLikeBer(raw)&&depth<8){
+      // Nested BER in OCTET STRING: use childType as hint
+      node.children=parseBer(raw,baseOffset+l.pos,childType,tagMaps,depth+1);
+    }
 
     if(!node.children.length){
       if(t.cls===2&&node.origChildType==='OBJECT'){
@@ -339,15 +482,42 @@ function parseBer(buf, baseOffset, typeHint, tagMaps, depth) {
 // ── Auto-detect type hint from first BER tag ─────────────────────────────────
 function detectTypeHint(buf) {
   if (!buf.length) return 'PS-PDU';
-  const firstByte = buf[0];
-  const cls  = (firstByte >> 6) & 3;
-  const tag  = firstByte & 0x1f;
-  if (cls === 0 && tag === 16) return 'PS-PDU';        // UNIVERSAL SEQUENCE
-  if (cls === 2) {                                       // CONTEXT tagged
-    if (tag === 0) return 'UmtsCS-IRIsContent';         // [0] = iRIContent
-    if (tag === 2) return 'IRIsContent';                 // [2] ETSI HI2
+  const b0  = buf[0];
+  const cls = (b0 >> 6) & 3;
+  const tag = b0 & 0x1f;
+
+  if (cls === 0 && tag === 16) return 'PS-PDU';   // 0x30 UNIVERSAL SEQUENCE
+
+  if (cls === 2) {
+    if (tag === 0) return 'UmtsCS-IRIsContent';   // 0xa0
+
+    // Tags [2][3][4] = UmtsCS iRI-End/Continue/Report-record (no ambiguity)
+    if (tag >= 2 && tag <= 4) return 'UmtsCS-IRIContent';
+
+    // Tag [1] = AMBIGUOUS:
+    //   PS-PDU without outer SEQUENCE  -> [1]=pSHeader  (li-psDomainId   0.4.0.2.2.5.x)
+    //   PS-PDU EPS variant             -> [1]=pSHeader  (hi2epsDomainId  0.4.0.2.2.4.8.x)
+    //   UmtsCS-IRIContent iRI-Begin    -> [1]=iRI-Begin (hi2CSDomainId   0.4.0.2.2.4.3.x)
+    //
+    // Distinguish via OID bytes in first 50 bytes:
+    //   04 00 02 02 05        -> li-psDomainId        -> PS-PDU
+    //   04 00 02 02 04 [03]   -> hi2CSDomainId (UmtsCS) -> UmtsCS-IRIContent
+    //   04 00 02 02 04 [!03]  -> hi2epsDomainId (EPS) -> PS-PDU
+    if (tag === 1) {
+      const limit = Math.min(buf.length - 5, 50);
+      for (let i = 0; i < limit; i++) {
+        if (buf[i]===0x04 && buf[i+1]===0x00 && buf[i+2]===0x02 && buf[i+3]===0x02) {
+          if (buf[i+4] === 0x05) return 'PS-PDU';            // li-psDomainId
+          if (buf[i+4] === 0x04) {
+            // Check next byte: 0x03 = UmtsCS, others = EPS PS-PDU
+            return (buf[i+5] === 0x03) ? 'UmtsCS-IRIContent' : 'PS-PDU';
+          }
+        }
+      }
+      return 'PS-PDU'; // fallback
+    }
   }
-  return 'PS-PDU';  // fallback
+  return 'PS-PDU';
 }
 
 
@@ -405,10 +575,13 @@ function rebuildMenu() {
         ...recentFiles.map(f => ({
           label: path.basename(f),
           sublabel: f,
-          click: () => loadFile(f)
+          click: () => mainWindow.webContents.send('open-recent', f)
         })),
         { type: 'separator' },
-        { label: 'Clear Recent Files', click: () => { recentFiles=[]; saveRecent(); rebuildMenu(); if(mainWindow) mainWindow.webContents.send('recent-files-updated',[]); } }
+        { label: 'Clear Recent Files', click: () => {
+          recentFiles=[]; saveRecent(); rebuildMenu();
+          if(mainWindow) mainWindow.webContents.send('recent-files-updated',[]);
+        }}
       ]
     : [];
 

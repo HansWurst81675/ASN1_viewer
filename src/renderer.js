@@ -52,7 +52,49 @@ function updateTitle() {
 }
 
 // ── Toolbar ───────────────────────────────────────────────────────────────────
-document.getElementById('btn-open').addEventListener('click', () => window.berApi.openFileDialog());
+
+// Intercept open to check for unsaved changes first
+async function checkUnsavedAndOpen(openFn) {
+  if (hasChanges) {
+    const save = await confirmUnsaved();
+    if (save === 'cancel') return;
+    if (save === 'save') { await saveAs(); if (hasChanges) return; } // save failed
+  }
+  openFn();
+}
+
+function confirmUnsaved() {
+  return new Promise(resolve => {
+    const existing = document.getElementById('edit-dialog');
+    if (existing) existing.remove();
+    const dlg = document.createElement('div');
+    dlg.id = 'edit-dialog';
+    dlg.innerHTML = `
+      <div id="edit-overlay"></div>
+      <div id="edit-box" style="width:380px">
+        <div id="edit-title">Ungespeicherte Änderungen</div>
+        <div style="margin:12px 0;color:var(--text)">
+          Die aktuelle Datei hat ungespeicherte Änderungen.<br>
+          Möchten Sie sie vor dem Öffnen speichern?
+        </div>
+        <div id="edit-buttons" style="justify-content:space-between">
+          <button id="dlg-cancel" class="btn-tool" style="border:1px solid var(--border)">Abbrechen</button>
+          <div style="display:flex;gap:8px">
+            <button id="dlg-discard" class="btn-tool" style="border:1px solid var(--border)">Verwerfen</button>
+            <button id="dlg-save" style="padding:5px 16px;background:var(--accent);border:none;border-radius:4px;color:#fff;font-family:inherit;font-weight:bold;cursor:pointer">Speichern</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(dlg);
+    dlg.querySelector('#dlg-cancel').onclick  = () => { dlg.remove(); resolve('cancel'); };
+    dlg.querySelector('#dlg-discard').onclick = () => { dlg.remove(); resolve('discard'); };
+    dlg.querySelector('#dlg-save').onclick    = () => { dlg.remove(); resolve('save'); };
+    dlg.querySelector('#edit-overlay').onclick = () => { dlg.remove(); resolve('cancel'); };
+  });
+}
+
+document.getElementById('btn-open').addEventListener('click', () =>
+  checkUnsavedAndOpen(() => window.berApi.openFileDialog()));
 document.getElementById('btn-expand').addEventListener('click', expandAll);
 document.getElementById('btn-collapse').addEventListener('click', collapseAll);
 document.getElementById('btn-search').addEventListener('click', searchNext);
@@ -66,11 +108,13 @@ window.berApi.onCollapseAll(collapseAll);
 window.berApi.onSaveAs(saveAs);
 window.berApi.onExportTxt(exportTxt);
 window.berApi.onRecentFilesUpdated(() => {}); // menu handles it
+window.berApi.onOpenRecent(filePath =>
+  checkUnsavedAndOpen(() => window.berApi.openFilePath(filePath)));
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────────
 document.addEventListener('keydown', e => {
   const ctrl = e.ctrlKey||e.metaKey;
-  if(ctrl&&e.key==='o')      { e.preventDefault(); window.berApi.openFileDialog(); }
+  if(ctrl&&e.key==='o')      { e.preventDefault(); checkUnsavedAndOpen(() => window.berApi.openFileDialog()); }
   if(ctrl&&e.key==='f')      { e.preventDefault(); searchInput.focus(); searchInput.select(); }
   if(ctrl&&e.shiftKey&&e.key==='S'){ e.preventDefault(); saveAs(); }
   if(ctrl&&e.shiftKey&&e.key==='E'){ e.preventDefault(); exportTxt(); }
@@ -89,7 +133,7 @@ document.addEventListener('dragleave', () => dropOverlay.classList.remove('drop-
 document.addEventListener('drop', e => {
   e.preventDefault(); dropOverlay.classList.remove('drop-active');
   const file = e.dataTransfer.files[0];
-  if(file) window.berApi.openFilePath(file.path);
+  if (file) checkUnsavedAndOpen(() => window.berApi.openFilePath(file.path));
 });
 
 // ── Save As ───────────────────────────────────────────────────────────────────
@@ -196,6 +240,275 @@ function serializeNodes(nodes) {
   return new Uint8Array(nodes.flatMap(serializeNode));
 }
 
+// ── Context menu ──────────────────────────────────────────────────────────────
+function showContextMenu(x, y, node, row) {
+  const old = document.getElementById('ctx-menu');
+  if (old) old.remove();
+
+  const menu = document.createElement('div');
+  menu.id = 'ctx-menu';
+
+  const items = [];
+  if (!node.children.length) {
+    items.push({ label: '✏️  Bearbeiten',   action: () => openEditDialog(node, row) });
+    items.push({ label: '📋  Wert kopieren', action: () => navigator.clipboard.writeText(String(node.displayValue??'')) });
+  }
+  items.push({ label: '📋  Hex kopieren', action: () => {
+    const hex = (node.rawValue||[]).map(b=>b.toString(16).padStart(2,'0')).join(' ');
+    navigator.clipboard.writeText(hex);
+  }});
+  // SMS PDU decode: offer if field is named 'content' or rawValue looks like SMS PDU
+  if (!node.children.length && node.rawValue && node.rawValue.length >= 8) {
+    const fn = node.fieldName||'';
+    if (fn === 'content' || fn === 'national-SM-Content' || fn === 'sIPContent') {
+      items.push({ type: 'sep' });
+      items.push({ label: '📱  SMS dekodieren', action: () => showSmsDecode(node) });
+    }
+  }
+  if (node.children.length) {
+    items.push({ label: '⊞  Aufklappen',   action: () => setExpanded(row, node, true) });
+    items.push({ label: '⊟  Zuklappen',    action: () => setExpanded(row, node, false) });
+  }
+
+  for (const item of items) {
+    if (item.type === 'sep') {
+      const sep = document.createElement('div');
+      sep.style.cssText = 'height:1px;background:var(--border);margin:3px 0';
+      menu.appendChild(sep);
+      continue;
+    }
+    const el = document.createElement('div');
+    el.className = 'ctx-item';
+    el.textContent = item.label;
+    el.onclick = () => { menu.remove(); item.action(); };
+    menu.appendChild(el);
+  }
+
+  document.body.appendChild(menu);
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  menu.style.left = (x + mw > window.innerWidth  ? x - mw : x) + 'px';
+  menu.style.top  = (y + mh > window.innerHeight ? y - mh : y) + 'px';
+
+  const close = e => { if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('mousedown', close); } };
+  setTimeout(() => document.addEventListener('mousedown', close), 0);
+}
+
+// ── SMS PDU Decoder ───────────────────────────────────────────────────────────
+const GSM7_ALPHABET =
+  '@£$¥èéùìòÇ\nØø\rÅå' +
+  'Δ_ΦΓΛΩΠΨΣΘΞ\x1bÆæßÉ' +
+  ' !"#¤%&\'()*+,-./' +
+  '0123456789:;<=>?' +
+  '¡ABCDEFGHIJKLMNO' +
+  'PQRSTUVWXYZÄÖÑÜ§' +
+  '¿abcdefghijklmno' +
+  'pqrstuvwxyzäöñüà';
+
+function decodeBcdGsm(bcd, len) {
+  let s = '';
+  for (const b of bcd) {
+    s += (b & 0xf).toString();
+    const hi = (b >> 4) & 0xf;
+    if (hi !== 0xf && s.length < len) s += hi.toString();
+  }
+  return s.slice(0, len);
+}
+
+function decodeGsm7(data, numSeptets, shift) {
+  shift = shift || 0;
+  let buf = 0, bits = shift, result = '';
+  for (const byte of data) {
+    buf |= byte << bits; bits += 8;
+    while (bits >= 7) {
+      const idx = buf & 0x7f;
+      if (result.length < numSeptets)
+        result += idx < GSM7_ALPHABET.length ? GSM7_ALPHABET[idx] : '\uFFFD';
+      buf >>= 7; bits -= 7;
+    }
+  }
+  return result;
+}
+
+function decodeSmsPdu(rawBytes) {
+  const raw = rawBytes;
+  let pos = 0;
+  const result = {};
+  const errors = [];
+
+  try {
+    // Detect SMSC prefix: only skip it if second byte looks like a valid TON/NPI
+    // (common values: 0x91=international, 0x81=national, 0xa1, 0x11, 0x01)
+    // Avoids misinterpreting the TP byte as SMSC length
+    const VALID_TON_NPI = new Set([0x91, 0x81, 0xa1, 0x11, 0x01, 0xd0]);
+    const smscLen = raw[0];
+    if (smscLen > 0 && smscLen <= 12 && raw.length > smscLen + 1 && VALID_TON_NPI.has(raw[1])) {
+      const smscTon = raw[1];
+      const smscBcd = raw.slice(2, 1 + smscLen);
+      const smscDigits = decodeBcdGsm(smscBcd, smscBcd.length * 2);
+      const smscIntl = ((smscTon >> 4) & 0x7) === 1 ? '+' : '';
+      result.smsc = smscIntl + smscDigits.replace(/f/gi, '');
+      pos = 1 + smscLen;
+    }
+
+    if (pos >= raw.length) throw new Error('Too short after SMSC');
+
+    const bcd2 = b => (b & 0xf) * 10 + ((b >> 4) & 0xf);
+
+    // TP byte
+    const tp = raw[pos++];
+    const mti = tp & 0x03;
+    const udhi = (tp >> 6) & 1;
+    const mtiNames = ['SMS-DELIVER', 'SMS-SUBMIT', 'SMS-STATUS-REPORT', 'reserved'];
+    result.type = mtiNames[mti];
+
+    // SMS-STATUS-REPORT has completely different structure (no PID/DCS/text)
+    if (mti === 2) {
+      result.messageRef = raw[pos++]; // TP-MR
+      // TP-RA (Recipient Address)
+      const raLen = raw[pos++]; const raTon = raw[pos++];
+      const raBcd = raw.slice(pos, pos + Math.ceil(raLen / 2)); pos += Math.ceil(raLen / 2);
+      const raIntl = ((raTon >> 4) & 0x7) === 1 ? '+' : '';
+      result.to = raIntl + decodeBcdGsm(raBcd, raLen);
+      // TP-SCTS (send time)
+      if (pos + 7 <= raw.length) {
+        const s = raw.slice(pos, pos + 7); pos += 7;
+        const tz = bcd2(s[6] & ~0x08) * 15;
+        result.timestamp = `20${bcd2(s[0]).toString().padStart(2,'0')}-${bcd2(s[1]).toString().padStart(2,'0')}-${bcd2(s[2]).toString().padStart(2,'0')} ` +
+          `${bcd2(s[3]).toString().padStart(2,'0')}:${bcd2(s[4]).toString().padStart(2,'0')}:${bcd2(s[5]).toString().padStart(2,'0')} ` +
+          `${s[6]&0x08?'-':'+'}${Math.floor(tz/60).toString().padStart(2,'0')}:${(tz%60).toString().padStart(2,'0')}`;
+      }
+      // TP-DT (delivery time)
+      if (pos + 7 <= raw.length) {
+        const d = raw.slice(pos, pos + 7); pos += 7;
+        const tz = bcd2(d[6] & ~0x08) * 15;
+        result.deliveryTime = `20${bcd2(d[0]).toString().padStart(2,'0')}-${bcd2(d[1]).toString().padStart(2,'0')}-${bcd2(d[2]).toString().padStart(2,'0')} ` +
+          `${bcd2(d[3]).toString().padStart(2,'0')}:${bcd2(d[4]).toString().padStart(2,'0')}:${bcd2(d[5]).toString().padStart(2,'0')} ` +
+          `${d[6]&0x08?'-':'+'}${Math.floor(tz/60).toString().padStart(2,'0')}:${(tz%60).toString().padStart(2,'0')}`;
+      }
+      // TP-ST (status)
+      if (pos < raw.length) {
+        const st = raw[pos++];
+        const stMap = {0:'Zugestellt', 1:'Weitergeleitet', 2:'Ersetzt',
+          0x20:'Netz überlastet', 0x21:'Empfänger beschäftigt', 0x22:'Keine Antwort',
+          0x24:'Dienst abgelehnt', 0x40:'Ungültiges Ziel'};
+        result.status = stMap[st] ?? `0x${st.toString(16).padStart(2,'0')}`;
+      }
+      result.text = ''; // no text body
+      return { ...result, errors };
+    }
+
+    // SMS-DELIVER / SMS-SUBMIT: address
+    const addrLen = raw[pos++];
+    const addrTon = raw[pos++];
+    const addrBcd = raw.slice(pos, pos + Math.ceil(addrLen / 2)); pos += Math.ceil(addrLen / 2);
+    const addrIntl = ((addrTon >> 4) & 0x7) === 1 ? '+' : '';
+    result[mti === 1 ? 'to' : 'from'] = addrIntl + decodeBcdGsm(addrBcd, addrLen);
+
+    result.pid = `0x${raw[pos++].toString(16).padStart(2,'0')}`;
+
+    const dcs = raw[pos++];
+    const cg = (dcs >> 4) & 0xf;
+    let alpha = 0;
+    if (cg < 4) alpha = (dcs >> 2) & 0x03;
+    else if (cg === 0xf) alpha = (dcs >> 2) & 1;
+    result.dcs = `0x${dcs.toString(16).padStart(2,'0')} (${['GSM7','8-bit','UCS2','reserved'][alpha]})`;
+
+    // SCTS (SMS-DELIVER only; SMS-SUBMIT has VP instead)
+    if (mti === 0) {
+      const s = raw.slice(pos, pos + 7); pos += 7;
+      const tz = bcd2(s[6] & ~0x08) * 15;
+      result.timestamp = `20${bcd2(s[0]).toString().padStart(2,'0')}-${bcd2(s[1]).toString().padStart(2,'0')}-${bcd2(s[2]).toString().padStart(2,'0')} ` +
+        `${bcd2(s[3]).toString().padStart(2,'0')}:${bcd2(s[4]).toString().padStart(2,'0')}:${bcd2(s[5]).toString().padStart(2,'0')} ` +
+        `${s[6]&0x08?'-':'+'}${Math.floor(tz/60).toString().padStart(2,'0')}:${(tz%60).toString().padStart(2,'0')}`;
+    }
+
+    const udl = raw[pos++];
+    const ud = raw.slice(pos);
+
+    let udhLen = 0;
+    if (udhi && ud.length > 0) {
+      udhLen = ud[0] + 1;
+      let ui = 1;
+      while (ui < udhLen && ui + 1 < ud.length) {
+        const iei = ud[ui]; const iel = ud[ui + 1];
+        if (iei === 0x00 && iel >= 3 && ui + 4 < ud.length) {
+          result.fragment = `Teil ${ud[ui+4]}/${ud[ui+3]} (Ref=${ud[ui+2]})`;
+        }
+        ui += 2 + iel;
+      }
+    }
+
+    if (alpha === 0) {
+      result.text = decodeGsm7(ud.slice(udhLen), udl - (udhi ? Math.ceil(udhLen * 8 / 7) : 0),
+        udhi ? (udhLen * 8) % 7 : 0);
+    } else if (alpha === 1) {
+      result.text = new TextDecoder('latin1').decode(new Uint8Array(ud.slice(udhLen)));
+    } else if (alpha === 2) {
+      result.text = new TextDecoder('utf-16-be').decode(new Uint8Array(ud.slice(udhLen)));
+    } else {
+      result.text = '';
+    }
+  } catch (e) {
+    errors.push(e.message);
+  }
+
+  return { ...result, errors };
+}
+
+function showSmsDecode(node) {
+  const raw = node.rawValue || [];
+  const decoded = decodeSmsPdu(raw);
+
+  const existing = document.getElementById('edit-dialog');
+  if (existing) existing.remove();
+
+  const rows = [];
+  if (decoded.type)         rows.push(['Typ',            decoded.type]);
+  if (decoded.smsc)         rows.push(['SMSC',           decoded.smsc]);
+  if (decoded.from)         rows.push(['Von',            decoded.from]);
+  if (decoded.to)           rows.push(['An',             decoded.to]);
+  if (decoded.messageRef !== undefined) rows.push(['Ref', decoded.messageRef]);
+  if (decoded.timestamp)    rows.push(['Sendezeit',      decoded.timestamp]);
+  if (decoded.deliveryTime) rows.push(['Zustellzeit',    decoded.deliveryTime]);
+  if (decoded.status)       rows.push(['Status',         decoded.status]);
+  if (decoded.pid)          rows.push(['PID',            decoded.pid]);
+  if (decoded.dcs)          rows.push(['DCS',            decoded.dcs]);
+  if (decoded.fragment)     rows.push(['Fragment',       decoded.fragment]);
+  if (decoded.text)         rows.push(['Text',           decoded.text]);
+  if (decoded.errors?.length) rows.push(['⚠ Fehler',    decoded.errors.join(', ')]);
+
+  const tableHtml = rows.map(([k,v]) =>
+    `<tr><td style="color:var(--text-muted);padding:3px 12px 3px 0;white-space:nowrap">${k}</td>`+
+    `<td style="color:var(--green);word-break:break-all">${v}</td></tr>`
+  ).join('');
+
+  const dlg = document.createElement('div');
+  dlg.id = 'edit-dialog';
+  dlg.innerHTML = `
+    <div id="edit-overlay"></div>
+    <div id="edit-box" style="width:500px;max-height:80vh;overflow-y:auto">
+      <div id="edit-title">📱 SMS Inhalt
+        <span id="edit-type">${(node.fieldName||'')} · ${raw.length} B</span>
+      </div>
+      <table style="width:100%;border-collapse:collapse;margin:12px 0;font-size:12px">
+        ${tableHtml}
+      </table>
+      <div style="margin-top:8px;background:var(--bg-alt);border-radius:4px;padding:10px;font-size:13px;color:var(--green);word-break:break-all;white-space:pre-wrap">${decoded.text ?? '(kein Text)'}</div>
+      <div id="edit-buttons" style="margin-top:12px">
+        <button id="edit-cancel">Schließen</button>
+        <button id="edit-ok" onclick="navigator.clipboard.writeText(${JSON.stringify(decoded.text??'')})">Text kopieren</button>
+      </div>
+    </div>`;
+  document.body.appendChild(dlg);
+  dlg.querySelector('#edit-cancel').onclick = () => dlg.remove();
+  dlg.querySelector('#edit-overlay').onclick = () => dlg.remove();
+  dlg.querySelector('#edit-ok').onclick = () => {
+    navigator.clipboard.writeText(decoded.text ?? '');
+    statusLeft.textContent = 'SMS-Text kopiert';
+    dlg.remove();
+  };
+}
+
 // ── Edit dialog ───────────────────────────────────────────────────────────────
 function openEditDialog(node, row) {
   // Remove any existing dialog
@@ -204,7 +517,7 @@ function openEditDialog(node, row) {
 
   const isHex = node.rawValue && !isTextPrimitive(node);
   const currentVal = isHex
-    ? Buffer.from(node.rawValue).toString('hex').replace(/../g, '$& ').trim()
+    ? Array.from(node.rawValue).map(b => b.toString(16).padStart(2,'0')).join(' ')
     : (node.displayValue ?? '');
 
   const dlg = document.createElement('div');
@@ -261,10 +574,17 @@ function openEditDialog(node, row) {
 }
 
 function isTextPrimitive(node) {
-  // Treat as text if it's a string type or if current value looks like readable text
-  if(node.cls===0 && [12,19,22,26,30,23,24].includes(node.tag)) return true;
+  // UNIVERSAL string/time tags
+  if (node.cls === 0 && [12,19,22,26,30,23,24].includes(node.tag)) return true;
+  // Check raw bytes: if all printable ASCII → treat as text
+  if (node.rawValue && node.rawValue.length > 0) {
+    const allPrintable = node.rawValue.every(b => b >= 0x20 && b <= 0x7e);
+    if (allPrintable) return true;
+  }
+  // Fallback: displayValue looks like readable text (no leading 0x)
   const s = node.displayValue;
-  return typeof s==='string' && s.startsWith("'") && s.endsWith("'");
+  if (typeof s === 'string' && !s.startsWith('0x') && !/^\d+,\s+0x/.test(s)) return true;
+  return false;
 }
 
 function applyEdit(node, inputVal, isHex, errDiv) {
@@ -346,6 +666,13 @@ function renderNodes(nodes, container, depth) {
       row.ondblclick = e => { e.stopPropagation(); openEditDialog(node, row); };
       row.title = 'Double-click to edit';
     }
+
+    // Right-click context menu
+    row.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      selectRow(row, node);
+      showContextMenu(e.clientX, e.clientY, node, row);
+    });
 
     const cc=document.createElement('div'); cc.style.display='none'; cc.dataset.children='true';
     row._node=node; row._arrow=arrow; row._childContainer=cc;

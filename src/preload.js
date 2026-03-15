@@ -22,4 +22,5 @@ contextBridge.exposeInMainWorld('berApi', {
   onSaveAs:         (cb) => ipcRenderer.on('save-as',        ()     => cb()),
   onExportTxt:      (cb) => ipcRenderer.on('export-txt-cmd', ()     => cb()),
   onRecentFilesUpdated: (cb) => ipcRenderer.on('recent-files-updated', (_, r) => cb(r)),
+  onOpenRecent:         (cb) => ipcRenderer.on('open-recent', (_, p) => cb(p)),
 });
