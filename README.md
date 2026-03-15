@@ -85,9 +85,10 @@ ber_viewer_electron/
   - `0x30` (UNIVERSAL SEQUENCE) → PS-PDU (5G, 4G, VoIP/SIP, Messaging)
   - `0xa0` (CONTEXT [0]) → UmtsCS-IRIsContent (nicht-5G CS-Domain)
   - `0xa2` (CONTEXT [2]) → ETSI HI2 IRIsContent
-- **531 Typkarten** aus den ASN.1-Schemas für vollständige Feldnamen
-- **210 ENUMERATED-Typen** → Werte als Text (`timeOfInterception`, `nR`, `modificationRequest` …)
+- **531 Typkarten** aus den ASN.1-Schemas für vollständige Feldnamen — inkl. EPS-Kette für nicht-5G Dateien (`EPSIRI → EpsIRIContent → EpsIRI-Parameters`)
+- **210 ENUMERATED-Typen** → Werte als Text (`timeOfInterception`, `nR`, `modificationRequest`, `bearerActivation` …)
 - **Timestamps** → lesbar (`2026-02-06 09:44:01.608Z`)
+- **Unix-Timestamps** (`seconds`-Feld in `MicroSecondTimeStamp`) → lesbares Datum (`2025-10-30 16:30:36Z`)
 - **MSISDN / IMSI / IMEI** → BCD-dekodiert bei 4G/Umts-Formaten
 - **Nested BER** → `threeGPP33128DefinedIRI`-Payload wird rekursiv aufgelöst bis zur Location (Lat/Lon), SUPI, GPSI usw.
 
@@ -104,6 +105,11 @@ ber_viewer_electron/
 - **Doppelklick** auf ein primitives Feld öffnet den Editor:
   - Text-Eingabe für Strings (IA5String, UTF8String, PrintableString …)
   - Hex-Eingabe für Binärfelder (`30 31 32` oder `303132`)
+- **Rechtsklick** auf jeden Knoten öffnet ein Kontextmenü:
+  - *Bearbeiten* — öffnet den Editor (nur bei primitiven Feldern)
+  - *Wert kopieren* — kopiert den dekodierten Wert in die Zwischenablage
+  - *Hex kopieren* — kopiert die rohen Bytes als Hex-String
+  - *Aufklappen / Zuklappen* — für konstruierte Knoten
 - **Längenänderungen erlaubt** — alle BER-Längenfelder werden beim Speichern automatisch neu berechnet
 - Geänderte Felder werden **orange** markiert, Titelzeile zeigt `*`
 
@@ -111,6 +117,8 @@ ber_viewer_electron/
 
 - **Strg+Shift+S** / Menü → *Save As* → BER-Datei unter neuem Namen speichern
 - Alle Änderungen werden korrekt re-serialisiert (korrekte Tag/Length/Value-Struktur)
+- Beim Öffnen einer neuen Datei mit ungespeicherten Änderungen erscheint ein Dialog:
+  **Speichern / Verwerfen / Abbrechen** — gilt für Toolbar-Button, Strg+O und Drag & Drop
 
 ### Export TXT
 
@@ -156,5 +164,5 @@ ber_viewer_electron/
 | Alle aufklappen | `Ctrl+E` |
 | Alle zuklappen | `Ctrl+W` |
 | Navigation | `↑ ↓ ← →` |
-| Feld editieren | `Doppelklick` |
+| Feld editieren | `Doppelklick` oder `Rechtsklick → Bearbeiten` |
 | DevTools | `View → Toggle DevTools` |
