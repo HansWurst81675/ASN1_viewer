@@ -143,6 +143,110 @@ function buildTagMaps(asn1Dir) {
     4:['userLocation',      'UserLocation'],
   };
 
+  // HI2Operations CommunicationIdentifier (different field order than LI-PS-PDU!)
+  // [0]=communication-Identity-Number [1]=Network-Identifier
+  maps['HI2CommunicationIdentifier'] = {
+    0: ['communication-Identity-Number', 'OCTET'],
+    1: ['network-Identifier', 'Network-Identifier'],
+  };
+
+  // MessagingCC (CCPayload [14]) - email/messaging content
+  maps['MessagingCC'] = {
+    0: ['messaging-cc-obj-id',          'OBJECT'],
+    1: ['event-identifier',             'INTEGER'],
+    2: ['content-identifier',           'INTEGER'],
+    3: ['sequence-number',              'INTEGER'],
+    4: ['end-of-sequence',              'BOOLEAN'],
+    5: ['content-type',                 'OCTET'],
+    6: ['content',                      'OCTET'],
+    7: ['content-transfer-encoding',    'OCTET'],
+  };
+
+  // CCContents CHOICE alias for MessagingCC (most common in intercept)
+  maps['CCContents'] = {
+     1: ['emailCC',              'EmailCC'],
+     2: ['iPCC',                 'IPCC'],
+     4: ['uMTSCC',               'OCTET'],
+     6: ['l2CC',                 'L2CC'],
+    12: ['iPMMCC',               'IPMMCC'],
+    14: ['messagingCC',          'MessagingCC'],
+    15: ['ePSCC',                'OCTET'],
+    16: ['uMTSCC-CC-PDU',        'OCTET'],
+    17: ['ePSCC-CC-PDU',         'OCTET'],
+    23: ['threeGPP33128DefinedCC','OCTET'],
+  };
+
+  // SNSSAI (Single Network Slice Selection Assistance Information)
+  maps['SNSSAI'] = {
+    1: ['sliceServiceType',              'OCTET'],
+    2: ['sliceDifferentiator',           'OCTET'],
+    3: ['mappedHPLMNSliceServiceType',   'OCTET'],
+    4: ['mappedHPLMNSliceDifferentiator','OCTET'],
+  };
+
+  // TAI (Tracking Area Identity) — pLMNID must be 'PLMNID' not 'OCTET' to recurse
+  maps['TAI'] = {
+    1: ['pLMNID', 'PLMNID'],
+    2: ['tAC',    'OCTET'],
+    3: ['nID',    'OCTET'],
+  };
+
+  // MessagingCC (CCPayload [14]) - email/messaging content
+  maps['MessagingCC'] = {
+    0: ['messaging-cc-obj-id',          'OBJECT'],
+    1: ['event-identifier',             'INTEGER'],
+    2: ['content-identifier',           'INTEGER'],
+    3: ['sequence-number',              'INTEGER'],
+    4: ['end-of-sequence',              'BOOLEAN'],
+    5: ['content-type',                 'OCTET'],
+    6: ['content',                      'OCTET'],
+    7: ['content-transfer-encoding',    'OCTET'],
+  };
+
+  // CCContents CHOICE — includes payloadDirection [0] from LI-PS-PDU hybrid
+  maps['CCContents'] = {
+     0: ['payloadDirection',    'ENUMERATED'],
+     1: ['emailCC',              'EmailCC'],
+     2: ['iPCC',                 'IPCC'],
+     4: ['uMTSCC',               'OCTET'],
+     6: ['l2CC',                 'L2CC'],
+    12: ['iPMMCC',               'IPMMCC'],
+    14: ['messagingCC',          'MessagingCC'],
+    15: ['ePSCC',                'OCTET'],
+    16: ['uMTSCC-CC-PDU',        'OCTET'],
+    17: ['ePSCC-CC-PDU',         'OCTET'],
+    23: ['threeGPP33128DefinedCC','OCTET'],
+  };
+
+  // HI2Operations CommunicationIdentifier (different from LI-PS-PDU!)
+  maps['HI2CommunicationIdentifier'] = {
+    0: ['communication-Identity-Number', 'OCTET'],
+    1: ['network-Identifier',            'Network-Identifier'],
+  };
+
+  // UmtsCS partyIdentity (HI2Operations variant with [3]=imsi, [4]=callingPartyNumber)
+  maps['UmtsHI2PartyIdentity'] = {
+    1: ['imei',                'OCTET'],
+    2: ['tei',                 'OCTET'],
+    3: ['imsi',                'OCTET'],
+    4: ['callingPartyNumber',  'OCTET'],
+    5: ['calledPartyNumber',   'OCTET'],
+    6: ['msISDN',              'OCTET'],
+    7: ['e164-Format',         'OCTET'],
+    8: ['sip-uri',             'OCTET'],
+    9: ['tel-url',             'OCTET'],
+   10: ['party-Validity',      'OCTET'],
+  };
+
+  // IPMMIRILocation (from LI-PS-PDU, not TS33128)
+  maps['IPMMIRILocation'] = {
+    0: ['umtsHI2Location',    'UmtsHI2Location'],
+    1: ['epsLocation',        'EPSLocation'],
+    2: ['wlanLocation',       'WlanLocationAttributes'],
+    3: ['eTSI671HI2Location', 'ETSI671HI2Location'],
+    4: ['userLocation',       'UserLocation'],
+  };
+
   return maps;
 }
 
@@ -378,16 +482,31 @@ const EXTRA_HINTS = {
   'UmtsCS-IRI-Parameters,9':    'PartyInformationSEQ',
   'IRI-Parameters,9':           'PartyInformationSEQ',
   // PartyInformation partyIdentity inline SEQUENCE
-  'PartyInformation,1':         'EpsPartyIdentity',
-  'Party-Information,1':        'UmtsPartyIdentity',
+  'PartyInformation,1':         'UmtsHI2PartyIdentity',   // HI2 format (UmtsCS/EPS)
+  'Party-Information,1':        'UmtsHI2PartyIdentity',   // Umts-HI2Operations variant
   // GSMLocation geoCoordinates inline SEQUENCE
   'GSMLocation,1':              'GsmGeoCoordinates',
   'GSMLocation,2':              'UtmCoordinates',
   // Other IRIContents CHOICE members
   'UMTSIRI,0':                  'UmtsIRI-Parameters',
   'UMTSIRI,1':                  'UmtsIRIsContent',
+  // CCPayload content chain
+  'CCPayload,2':                'CCContents',
+  'CCContents,14':              'MessagingCC',
+  // 5G TAI pLMNID -> PLMNID type (enables mCC/mNC labels)
+  'TAI,1':                      'PLMNID',
+  // 5G slice/NSSAI/TAI inner fields
+  'Slice,1':                    'NSSAI',
+  'Slice,2':                    'NSSAI',
+  'allowedNSSAI,1':             'SNSSAI',
+  'fiveGSTAIList,1':            'TAI',
+  // UmtsCS-IRI-Parameters uses HI2Operations CommunicationIdentifier (different from LI-PS-PDU!)
+  'UmtsCS-IRI-Parameters,2':    'HI2CommunicationIdentifier',
+  // HI2CommunicationIdentifier[1] = Network-Identifier (same as Network-Identifier in maps)
+  'HI2CommunicationIdentifier,1': 'Network-Identifier',
   // IP address inner encoding (LI-PS-PDU IP-value)
   'IPv6Address,1':              'iPBinaryAddress',
+  'IPv6Address,2':              'iPBinaryAddress',
   'IPv4Address,1':              'iPBinaryAddress',
   // EPS-GTPV2-SpecificParameters[23] = ePSlocationOfTheTarget :: EPSLocation
   'EPS-GTPV2-SpecificParameters,23': 'EPSLocation',
@@ -444,10 +563,14 @@ function parseBer(buf, baseOffset, typeHint, tagMaps, depth) {
 
     let recurseHint=childType;
     if(t.cls===0&&t.tag===16){
-      // UNIVERSAL SEQUENCE
+      // UNIVERSAL SEQUENCE — special passthroughs for SEQUENCE OF types
       if     (typeHint==='iRIPayloadSEQ')         recurseHint='LIPSIRIPayload';
       else if(typeHint==='cCPayloadSEQ')           recurseHint='CCPayload';
       else if(typeHint==='PartyInformationSEQ')    recurseHint='PartyInformation';
+      // SEQUENCE OF types: forward to element type
+      else if(typeHint==='NSSAI')                  recurseHint='SNSSAI';
+      else if(typeHint==='fiveGSTAIList')           recurseHint='TAI';
+      else if(typeHint==='TAIList')                 recurseHint='TAI';
       else if(childType)                            recurseHint=childType;
       else                                          recurseHint=typeHint;
     }else if(t.cls===0&&t.tag===17){

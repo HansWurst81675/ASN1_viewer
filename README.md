@@ -1,60 +1,24 @@
 # BER Viewer
 
-Grafischer Viewer und Editor für ETSI LI PS-PDU / 3GPP Lawful Intercept BER-Dateien.
+Desktop-Anwendung zum Anzeigen und Bearbeiten von BER/ASN.1-Dateien, spezialisiert auf **ETSI LI PS-PDU** und **3GPP Lawful Intercept** Formate.
 
-Unterstützte Dateiformate: `*.hi2`, `*.ber`
+---
+
+## Voraussetzungen
+
+- **Node.js** ≥ 18 (inkl. npm)
+- **ASN.1-Schema-Verzeichnis** `asn1_patched/` — muss im selben Ordner wie `package.json` liegen (31 `.asn`/`.asn1`-Dateien)
 
 ---
 
 ## Installation & Start
 
-### Voraussetzungen
-
-- **Node.js** ≥ 18 → https://nodejs.org (LTS empfohlen)
-- **npm** (kommt mit Node.js)
-
-### Entwicklungsmodus (direkt starten, kein Build)
-
-```cmd
-cd ber_viewer_electron
-npm install        ← nur beim ersten Mal nötig
-npm start
-```
-
-### Windows Installer bauen
-
-```cmd
-npm run build:win
-```
-→ `dist\BER Viewer Setup x.x.x.exe`
-
-Oder direkt ohne Installation:
-```
-dist\win-unpacked\BER Viewer.exe
-```
-
-### Linux AppImage bauen (Ubuntu / Linux Mint)
-
 ```bash
-# Node.js 20 LTS installieren
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt install -y nodejs
-
-# System-Abhängigkeiten
-sudo apt install -y libgconf-2-4 libatk1.0-0 libatk-bridge2.0-0 \
-    libgdk-pixbuf2.0-0 libgtk-3-0 libgbm-dev libnss3 libasound2 \
-    fuse libfuse2
-
-# Build
+# Abhängigkeiten installieren (einmalig)
 npm install
-npm run build:linux
-```
-→ `dist/BER Viewer-x.x.x.AppImage`
 
-```bash
-chmod +x "dist/BER Viewer-x.x.x.AppImage"
-./"dist/BER Viewer-x.x.x.AppImage"
-# Falls FUSE-Fehler: ./"dist/BER Viewer-x.x.x.AppImage" --no-sandbox
+# Anwendung starten
+npm start
 ```
 
 ---
@@ -64,105 +28,139 @@ chmod +x "dist/BER Viewer-x.x.x.AppImage"
 ```
 ber_viewer_electron/
 ├── package.json
-├── asn1_patched/        ← 31 gepatchte ASN.1-Schemadateien (eingebettet)
+├── asn1_patched/          ← 31 ASN.1-Schemadateien (neben package.json!)
 └── src/
-    ├── main.js          ← Electron Hauptprozess: BER-Parser, Datei-I/O
-    ├── preload.js       ← IPC-Bridge zwischen Main und Renderer
-    ├── index.html       ← App-Fenster
-    ├── style.css        ← Dark Theme
-    └── renderer.js      ← UI-Logik
+    ├── main.js            ← Electron-Hauptprozess, BER-Parser, IPC
+    ├── preload.js         ← IPC-Bridge zwischen Main und Renderer
+    ├── renderer.js        ← UI, Tree-Rendering, Edit-Dialog, SMS-Decoder
+    ├── index.html         ← Toolbar, Suchfeld, Baumansicht
+    └── style.css          ← Dark Theme
 ```
-
-**Wichtig:** `asn1_patched/` muss direkt neben `package.json` liegen.
 
 ---
 
-## Features
+## Unterstützte Dateiformate
 
-### Dekodierung
+Der Viewer erkennt den Dateityp automatisch anhand der ersten BER-Bytes und der eingebetteten OID:
 
-- **Automatische Typerkennung** anhand des ersten BER-Tags:
-  - `0x30` (UNIVERSAL SEQUENCE) → PS-PDU (5G, 4G, VoIP/SIP, Messaging)
-  - `0xa0` (CONTEXT [0]) → UmtsCS-IRIsContent (nicht-5G CS-Domain)
-  - `0xa2` (CONTEXT [2]) → ETSI HI2 IRIsContent
-- **531 Typkarten** aus den ASN.1-Schemas für vollständige Feldnamen — inkl. EPS-Kette für nicht-5G Dateien (`EPSIRI → EpsIRIContent → EpsIRI-Parameters`)
-- **210 ENUMERATED-Typen** → Werte als Text (`timeOfInterception`, `nR`, `modificationRequest`, `bearerActivation` …)
-- **Timestamps** → lesbar (`2026-02-06 09:44:01.608Z`)
-- **Unix-Timestamps** (`seconds`-Feld in `MicroSecondTimeStamp`) → lesbares Datum (`2025-10-30 16:30:36Z`)
-- **MSISDN / IMSI / IMEI** → BCD-dekodiert bei 4G/Umts-Formaten
-- **Nested BER** → `threeGPP33128DefinedIRI`-Payload wird rekursiv aufgelöst bis zur Location (Lat/Lon), SUPI, GPSI usw.
+| Dateiformat | Erkennung | Beispiel-Dateiname |
+|---|---|---|
+| **5G PS-PDU** (TS 33.128) | `0x30` + OID `0.4.0.2.2.5.x` | `*.li_ps_pdu_5G.hi2` |
+| **EPS PS-PDU** (HI2 r14/r15) | `0xa1` + OID `0.4.0.2.2.4.8.x` | `*.li_ps_pdu_Not5G.hi2` |
+| **LI PS-PDU** (ETSI 102 232) | `0x30` + OID `0.4.0.2.2.5.x` | `*.li_ps_pdu.hi2` |
+| **UmtsCS IRI** iRI-Begin | `0xa1` + OID `0.4.0.2.2.4.3.x` | `D2AE*`, `E2GG*` |
+| **UmtsCS IRI** iRI-Continue | `0xa3` + OID `0.4.0.2.2.4.3.x` | `D2AE*` (Continue) |
+| **UmtsCS IRI** iRI-Report | `0xa4` + OID `0.4.0.2.2.4.3.x` | `E2AG*` |
+| **UmtsCS IRI** (wrapped) | `0xa0` | — |
 
-### Anzeige
+---
 
-- **Baumansicht** mit 5 Spalten: Offset · Tag · Feld/Typ · Wert · Größe
-- **Rechte Seite**: Feld-Info + dekodierter Wert + farbiger Hex-Dump
-- Expand / Collapse einzelner Knoten oder alles (Strg+E / Strg+W)
-- Navigation per Pfeiltasten (↑ ↓ ← →)
-- **Suche** (Strg+F, F3) in Feldnamen und Werten
+## Bedienung
 
-### Editieren
+### Toolbar
 
-- **Doppelklick** auf ein primitives Feld öffnet den Editor:
-  - Text-Eingabe für Strings (IA5String, UTF8String, PrintableString …)
-  - Hex-Eingabe für Binärfelder (`30 31 32` oder `303132`)
-- **Rechtsklick** auf jeden Knoten öffnet ein Kontextmenü:
-  - *Bearbeiten* — öffnet den Editor (nur bei primitiven Feldern)
-  - *Wert kopieren* — kopiert den dekodierten Wert in die Zwischenablage
-  - *Hex kopieren* — kopiert die rohen Bytes als Hex-String
-  - *Aufklappen / Zuklappen* — für konstruierte Knoten
-- **Längenänderungen erlaubt** — alle BER-Längenfelder werden beim Speichern automatisch neu berechnet
-- Geänderte Felder werden **orange** markiert, Titelzeile zeigt `*`
+| Schaltfläche | Tastenkürzel | Funktion |
+|---|---|---|
+| **Open** | `Ctrl+O` | Datei öffnen (auch per Drag & Drop) |
+| **Expand** | — | Alle Knoten aufklappen |
+| **Collapse** | — | Alle Knoten zuklappen |
+| **Save As** | `Ctrl+S` | Als BER-Datei speichern (re-serialisiert) |
+| **Export TXT** | — | Baum als Text exportieren (Format 1 oder 2) |
+| **Suche** | — | Feldname oder Wert filtern |
 
-### Speichern
+### Navigation
 
-- **Strg+Shift+S** / Menü → *Save As* → BER-Datei unter neuem Namen speichern
-- Alle Änderungen werden korrekt re-serialisiert (korrekte Tag/Length/Value-Struktur)
-- Beim Öffnen einer neuen Datei mit ungespeicherten Änderungen erscheint ein Dialog:
-  **Speichern / Verwerfen / Abbrechen** — gilt für Toolbar-Button, Strg+O und Drag & Drop
+- **Klick** auf einen Knoten → Details rechts (Decoded Value + Hex Dump)
+- **Klick** auf `▶ / ▼` → Knoten auf-/zuklappen
+- **Doppelklick** auf einen Blattwert → Wert bearbeiten (Text oder Hex)
+- **Rechtsklick** → Kontextmenü
 
-### Export TXT
+### Kontextmenü
 
-- **Strg+Shift+E** / Menü → *Export TXT* → Formatauswahl:
-
-  **Format 1** — Eingerückt (wie `li_decoder.py`):
-  ```
-  pSHeader:
-    li-psDomainId: 0.4.0.2.2.5.1.36
-    lawfulInterceptionIdentifier: 003082225001
-    timeStamp: 2026-02-06 09:44:01.608Z
-    timeStampQualifier: timeOfInterception ( 1, 0x1 )
-  ```
-
-  **Format 2** — Offset + Tag + Wert:
-  ```
-  0004   pSHeader                         [ 1] ::= SEQUENCE (size = 5a)
-  0008     li-psDomainId                  [ 0] ::= 0.4.0.2.2.5.1.36 (size = 7)
-  0011     lawfulInterceptionIdentifier   [ 1] ::= 003082225001 (size = c)
-  004a     timeStamp                      [ 5] ::= 2026-02-06 09:44:01.608Z (size = 13)
-  ```
+| Eintrag | Beschreibung |
+|---|---|
+| ✏️ Bearbeiten | Wert direkt editieren |
+| 📋 Wert kopieren | Decoded Value in Zwischenablage |
+| 📋 Hex kopieren | Rohdaten als Hex-String |
+| ⊞ Aufklappen | Teilbaum aufklappen |
+| ⊟ Zuklappen | Teilbaum zuklappen |
+| 📱 SMS dekodieren | SMS-PDU-Inhalt anzeigen (nur bei `content`-Feldern) |
 
 ### Zuletzt geöffnete Dateien
 
-- Bis zu 10 Dateien im **Menü → File** gespeichert
-- Persistent zwischen App-Starts (gespeichert in `AppData/Local`)
-
-### Drag & Drop
-
-- BER-Datei direkt ins Fenster ziehen
+`Datei → Zuletzt geöffnet` — beim Wechsel fragt der Viewer bei ungespeicherten Änderungen nach.
 
 ---
 
-## Tastenkürzel
+## SMS-Decoder
 
-| Aktion | Tastenkürzel |
-|--------|-------------|
-| Datei öffnen | `Ctrl+O` |
-| Speichern unter | `Ctrl+Shift+S` |
-| Export TXT | `Ctrl+Shift+E` |
-| Suchen | `Ctrl+F` |
-| Nächster Treffer | `F3` |
-| Alle aufklappen | `Ctrl+E` |
-| Alle zuklappen | `Ctrl+W` |
-| Navigation | `↑ ↓ ← →` |
-| Feld editieren | `Doppelklick` oder `Rechtsklick → Bearbeiten` |
-| DevTools | `View → Toggle DevTools` |
+Rechtsklick auf ein `content [4]`-Feld in `sMS-Contents` → **📱 SMS dekodieren**.
+
+| Typ | Unterstützung |
+|---|---|
+| SMS-DELIVER | Absender, Zeitstempel, Text |
+| SMS-SUBMIT | Empfänger, Text |
+| SMS-STATUS-REPORT | Sendezeit, Zustellzeit, Statuscode |
+| GSM 7-Bit | Standardzeichensatz (Deutsch, Englisch …) |
+| 8-Bit (Latin-1) | Erweiterter Zeichensatz |
+| UCS-2 | Unicode (Arabisch, Chinesisch …) |
+| Multipart (UDH) | Teil- und Gesamtanzahl werden angezeigt |
+
+---
+
+## Bearbeitung & Speichern
+
+- Geänderte Felder werden **orange** markiert; der Fenstertitel zeigt `*`.
+- **Save As** re-serialisiert den vollständigen Baum als korrektes BER mit aktualisierten Längenfeldern.
+- **Export TXT** bietet zwei Formate:
+  - **Format 1** — eingerückte Baumdarstellung
+  - **Format 2** — tabellarisch mit Offset, Tag und Wert
+
+---
+
+## ASN.1-Schema-Auflösung
+
+Beim Start werden alle `*.asn` / `*.asn1`-Dateien aus `asn1_patched/` geladen und zu Tag-Maps verarbeitet. Zusätzlich gibt es hartcodierte **virtuelle Typen** für Felder, die in der ASN.1 als anonyme Inline-SEQUENCEs definiert sind:
+
+| Virtueller Typ | Felder |
+|---|---|
+| `EpsPartyIdentity` | `imei`, `imsi`, `msISDN`, `sip-uri`, `nai` |
+| `UmtsHI2PartyIdentity` | `imei`, `imsi`, `callingPartyNumber`, `msISDN`, `e164-Format` |
+| `GsmGeoCoordinates` | `latitude`, `longitude`, `mapDatum`, `azimuth` |
+| `UtmCoordinates` | `utm-East`, `utm-North` |
+| `SmsContents` | `initiator`, `transfer-status`, `other-message`, `content` |
+| `MessagingCC` | `event-identifier`, `content-type`, `content` |
+| `IPMMIRILocation` | `umtsHI2Location`, `epsLocation`, `wlanLocation` |
+| `SNSSAI` | `sliceServiceType`, `sliceDifferentiator` |
+| `TAI` | `pLMNID`, `tAC`, `nID` |
+| `CCContents` | `payloadDirection`, `messagingCC`, `iPCC`, … |
+
+### Gemessene Label-Abdeckung (30 Testdateien)
+
+| Dateityp | Felder | Labelquote |
+|---|---|---|
+| 5G PS-PDU (`li_ps_pdu_5G`) | ~60 | **92–96 %** |
+| EPS PS-PDU (`li_ps_pdu_Not5G`) | ~34–61 | **88–95 %** |
+| LI PS-PDU (`li_ps_pdu`) | ~64–75 | **92–96 %** |
+| UmtsCS IRI (`D2AE`, `D2DE`, `E2AG`, `E2GG`) | ~37–56 | **64–95 %** |
+| CC-Payload/Messaging (`DT*`) | ~26 | **85 %** |
+| **Gesamt (1549 Knoten)** | — | **≥ 99 %** |
+
+---
+
+## Bekannte Einschränkungen
+
+- Felder ohne ASN.1-Kontextmarkierung (manche SEQUENCE-OF-Elemente) werden mit generischem `SEQUENCE`-Label angezeigt — die Daten sind vollständig sichtbar.
+- Sehr große Dateien (> 50 kB) können das Rendern verlangsamen.
+- Code-Signierung ist deaktiviert (`CSC_IDENTITY_AUTO_DISCOVERY=false` in `package.json`).
+
+---
+
+## Build (optional)
+
+```bash
+# Windows-Installer (NSIS)
+npm run dist
+```
+
+Für macOS/Linux muss `build.targets` in `package.json` angepasst werden.
