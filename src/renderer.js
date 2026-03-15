@@ -1,369 +1,795 @@
-/* renderer.js — BER Viewer UI logic */
+/* renderer.js — BER Viewer UI */
 'use strict';
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let allNodes       = [];      // flat array of all rendered row elements
-let selectedRow    = null;
-let searchResults  = [];
-let searchIdx      = 0;
-let leftWidth      = 780;     // tree panel width in px
+let allNodes      = [];
+let selectedRow   = null;
+let searchResults = [];
+let searchIdx     = 0;
+let currentNodes  = [];       // top-level parsed nodes (for save/export)
+let currentFile   = null;     // current file path
+let hasChanges    = false;
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
-const dropOverlay   = document.getElementById('drop-overlay');
-const splitterCont  = document.getElementById('splitter-container');
-const treeBody      = document.getElementById('tree-body');
-const detailInfobar = document.getElementById('detail-infobar');
-const detailValue   = document.getElementById('detail-value');
-const detailHex     = document.getElementById('detail-hex');
-const fileInfo      = document.getElementById('file-info');
-const statusLeft    = document.getElementById('status-left');
-const statusRight   = document.getElementById('status-right');
-const searchInput   = document.getElementById('search-input');
-const treePanel     = document.getElementById('tree-panel');
-const resizeHandle  = document.getElementById('resize-handle');
+const dropOverlay  = document.getElementById('drop-overlay');
+const splitterCont = document.getElementById('splitter-container');
+const treeBody     = document.getElementById('tree-body');
+const fileInfo     = document.getElementById('file-info');
+const statusLeft   = document.getElementById('status-left');
+const statusRight  = document.getElementById('status-right');
+const searchInput  = document.getElementById('search-input');
+const treePanel    = document.getElementById('tree-panel');
+const resizeHandle = document.getElementById('resize-handle');
 
 // ── Schema info ───────────────────────────────────────────────────────────────
 window.berApi.getSchemaInfo().then(info => {
-  if (info.typeCount > 0) {
-    statusRight.textContent = `Schema: ${info.typeCount} types`;
-  } else {
-    statusRight.textContent = 'Schema: not loaded';
-  }
+  statusRight.textContent = info.typeCount > 0
+    ? `Schema: ${info.typeCount} types` : 'Schema: not loaded';
 });
 
 // ── File loading ──────────────────────────────────────────────────────────────
 window.berApi.onFileLoaded(data => {
-  if (!data.nodes || data.nodes.length === 0) {
-    statusLeft.textContent = `Error: no nodes parsed from ${data.fileName}`;
-    return;
-  }
+  if(!data.nodes||data.nodes.length===0){ statusLeft.textContent=`Error: no nodes`; return; }
+  currentNodes = data.nodes;
+  currentFile  = data.filePath;
+  hasChanges   = false;
   buildTree(data.nodes);
   fileInfo.textContent = `${data.fileName}  —  ${data.size} bytes`;
-  const count = countNodes(data.nodes);
-  statusLeft.textContent =
-    `${data.fileName}  |  ${data.size} bytes  |  ${count} fields`;
-
+  statusLeft.textContent = `${data.fileName}  |  ${data.size} bytes  |  ${countNodes(data.nodes)} fields`;
   dropOverlay.classList.add('hidden');
   splitterCont.classList.remove('hidden');
   clearDetail();
+  updateTitle();
 });
 
-window.berApi.onFileError(msg => {
-  statusLeft.textContent = `Error: ${msg}`;
-});
+window.berApi.onFileError(msg => { statusLeft.textContent = `Error: ${msg}`; });
 
 function countNodes(nodes) {
-  return nodes.reduce((sum, n) => sum + 1 + countNodes(n.children), 0);
+  return nodes.reduce((s,n) => s+1+countNodes(n.children), 0);
+}
+function updateTitle() {
+  document.title = `BER Viewer${hasChanges?' *':''} — ${currentFile ? currentFile.split(/[/\\]/).pop() : ''}`;
 }
 
-// ── Toolbar buttons ───────────────────────────────────────────────────────────
-document.getElementById('btn-open').addEventListener('click', () => {
-  window.berApi.openFileDialog();
-});
+// ── Toolbar ───────────────────────────────────────────────────────────────────
 
+// Intercept open to check for unsaved changes first
+async function checkUnsavedAndOpen(openFn) {
+  if (hasChanges) {
+    const save = await confirmUnsaved();
+    if (save === 'cancel') return;
+    if (save === 'save') { await saveAs(); if (hasChanges) return; } // save failed
+  }
+  openFn();
+}
+
+function confirmUnsaved() {
+  return new Promise(resolve => {
+    const existing = document.getElementById('edit-dialog');
+    if (existing) existing.remove();
+    const dlg = document.createElement('div');
+    dlg.id = 'edit-dialog';
+    dlg.innerHTML = `
+      <div id="edit-overlay"></div>
+      <div id="edit-box" style="width:380px">
+        <div id="edit-title">Ungespeicherte Änderungen</div>
+        <div style="margin:12px 0;color:var(--text)">
+          Die aktuelle Datei hat ungespeicherte Änderungen.<br>
+          Möchten Sie sie vor dem Öffnen speichern?
+        </div>
+        <div id="edit-buttons" style="justify-content:space-between">
+          <button id="dlg-cancel" class="btn-tool" style="border:1px solid var(--border)">Abbrechen</button>
+          <div style="display:flex;gap:8px">
+            <button id="dlg-discard" class="btn-tool" style="border:1px solid var(--border)">Verwerfen</button>
+            <button id="dlg-save" style="padding:5px 16px;background:var(--accent);border:none;border-radius:4px;color:#fff;font-family:inherit;font-weight:bold;cursor:pointer">Speichern</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(dlg);
+    dlg.querySelector('#dlg-cancel').onclick  = () => { dlg.remove(); resolve('cancel'); };
+    dlg.querySelector('#dlg-discard').onclick = () => { dlg.remove(); resolve('discard'); };
+    dlg.querySelector('#dlg-save').onclick    = () => { dlg.remove(); resolve('save'); };
+    dlg.querySelector('#edit-overlay').onclick = () => { dlg.remove(); resolve('cancel'); };
+  });
+}
+
+document.getElementById('btn-open').addEventListener('click', () =>
+  checkUnsavedAndOpen(() => window.berApi.openFileDialog()));
 document.getElementById('btn-expand').addEventListener('click', expandAll);
 document.getElementById('btn-collapse').addEventListener('click', collapseAll);
 document.getElementById('btn-search').addEventListener('click', searchNext);
+document.getElementById('btn-save').addEventListener('click', saveAs);
+document.getElementById('btn-export').addEventListener('click', exportTxt);
 
-searchInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter') searchNext();
-});
+searchInput.addEventListener('keydown', e => { if(e.key==='Enter') searchNext(); });
 
-// IPC from menu
 window.berApi.onExpandAll(expandAll);
 window.berApi.onCollapseAll(collapseAll);
+window.berApi.onSaveAs(saveAs);
+window.berApi.onExportTxt(exportTxt);
+window.berApi.onRecentFilesUpdated(() => {}); // menu handles it
+window.berApi.onOpenRecent(filePath =>
+  checkUnsavedAndOpen(() => window.berApi.openFilePath(filePath)));
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────────
 document.addEventListener('keydown', e => {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'o') {
-    e.preventDefault(); window.berApi.openFileDialog();
-  }
-  if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
-    e.preventDefault(); searchInput.focus(); searchInput.select();
-  }
-  if (e.key === 'F3') { e.preventDefault(); searchNext(); }
-  if ((e.ctrlKey || e.metaKey) && e.key === 'e') { e.preventDefault(); expandAll(); }
-  if ((e.ctrlKey || e.metaKey) && e.key === 'w') { e.preventDefault(); collapseAll(); }
-  if (e.key === 'ArrowDown' && selectedRow) moveSelection(1);
-  if (e.key === 'ArrowUp'   && selectedRow) moveSelection(-1);
-  if (e.key === 'ArrowRight' && selectedRow) toggleNode(selectedRow, true);
-  if (e.key === 'ArrowLeft'  && selectedRow) toggleNode(selectedRow, false);
+  const ctrl = e.ctrlKey||e.metaKey;
+  if(ctrl&&e.key==='o')      { e.preventDefault(); checkUnsavedAndOpen(() => window.berApi.openFileDialog()); }
+  if(ctrl&&e.key==='f')      { e.preventDefault(); searchInput.focus(); searchInput.select(); }
+  if(ctrl&&e.shiftKey&&e.key==='S'){ e.preventDefault(); saveAs(); }
+  if(ctrl&&e.shiftKey&&e.key==='E'){ e.preventDefault(); exportTxt(); }
+  if(e.key==='F3')           { e.preventDefault(); searchNext(); }
+  if(ctrl&&e.key==='e')      { e.preventDefault(); expandAll(); }
+  if(ctrl&&e.key==='w')      { e.preventDefault(); collapseAll(); }
+  if(e.key==='ArrowDown'&&selectedRow) moveSelection(1);
+  if(e.key==='ArrowUp'  &&selectedRow) moveSelection(-1);
+  if(e.key==='ArrowRight'&&selectedRow) toggleNode(selectedRow._node,true);
+  if(e.key==='ArrowLeft' &&selectedRow) toggleNode(selectedRow._node,false);
 });
 
 // ── Drag & drop ───────────────────────────────────────────────────────────────
-document.addEventListener('dragover', e => {
-  e.preventDefault();
-  dropOverlay.classList.add('drop-active');
-});
-document.addEventListener('dragleave', () => {
-  dropOverlay.classList.remove('drop-active');
-});
+document.addEventListener('dragover', e => { e.preventDefault(); dropOverlay.classList.add('drop-active'); });
+document.addEventListener('dragleave', () => dropOverlay.classList.remove('drop-active'));
 document.addEventListener('drop', e => {
-  e.preventDefault();
-  dropOverlay.classList.remove('drop-active');
+  e.preventDefault(); dropOverlay.classList.remove('drop-active');
   const file = e.dataTransfer.files[0];
-  if (file) window.berApi.openFilePath(file.path);
+  if (file) checkUnsavedAndOpen(() => window.berApi.openFilePath(file.path));
 });
+
+// ── Save As ───────────────────────────────────────────────────────────────────
+async function saveAs() {
+  if(!currentNodes.length){ statusLeft.textContent='No file loaded'; return; }
+  const base = currentFile ? currentFile.replace(/(\.[^.]+)$/, '_modified$1') : 'modified.hi2';
+  const savePath = await window.berApi.saveFileDialog(base);
+  if(!savePath) return;
+
+  const buf = serializeNodes(currentNodes);
+  const result = await window.berApi.saveFile(savePath, Array.from(buf));
+  if(result.ok){
+    hasChanges = false;
+    currentFile = savePath;
+    fileInfo.textContent = savePath.split(/[/\\]/).pop() + `  —  ${buf.length} bytes`;
+    statusLeft.textContent = `Saved: ${savePath}`;
+    updateTitle();
+  } else {
+    statusLeft.textContent = `Save error: ${result.error}`;
+  }
+}
+
+// ── Export TXT ────────────────────────────────────────────────────────────────
+async function exportTxt() {
+  if(!currentNodes.length){ statusLeft.textContent='No file loaded'; return; }
+  // Show format picker dialog
+  const dlg = document.createElement('div');
+  dlg.id = 'edit-dialog';
+  dlg.innerHTML = `
+    <div id="edit-overlay"></div>
+    <div id="edit-box" style="width:360px">
+      <div id="edit-title">Export TXT — Choose Format</div>
+      <div style="display:flex;flex-direction:column;gap:10px;margin:12px 0">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="radio" name="fmt" value="1" checked>
+          <span><b>Format 1</b> — Eingerückt (wie li_decoder.py)<br>
+            <span style="color:var(--text-muted);font-size:11px">pSHeader:\n  li-psDomainId: 0.4.0.2.2.5...</span>
+          </span>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="radio" name="fmt" value="2">
+          <span><b>Format 2</b> — Offset + Tag + Wert<br>
+            <span style="color:var(--text-muted);font-size:11px">0004   pSHeader [1] ::= SEQUENCE (size=5a)</span>
+          </span>
+        </label>
+      </div>
+      <div id="edit-buttons">
+        <button id="edit-cancel">Cancel</button>
+        <button id="edit-ok">Export…</button>
+      </div>
+    </div>`;
+  document.body.appendChild(dlg);
+  dlg.querySelector('#edit-cancel').onclick = () => dlg.remove();
+  dlg.querySelector('#edit-overlay').onclick = () => dlg.remove();
+  dlg.querySelector('#edit-ok').onclick = async () => {
+    const fmt = dlg.querySelector('input[name=fmt]:checked').value;
+    dlg.remove();
+    const base = currentFile ? currentFile.replace(/\.[^.]+$/, '.txt') : 'export.txt';
+    let result;
+    if (fmt === '1') {
+      const txt = currentNodes.map(n => nodeToTxt(n, 0)).join('\n') + '\n';
+      result = await window.berApi.exportTxt(base, txt);
+    } else {
+      result = await window.berApi.exportTxtFmt2(base, currentNodes);
+    }
+    if (result.ok) statusLeft.textContent = `Exported: ${result.path}`;
+    else if (result.error) statusLeft.textContent = `Export error: ${result.error}`;
+  };
+}
+
+function nodeToTxt(node, indent) {
+  const pad='  '.repeat(indent);
+  const name=node.fieldName||node.typeName||node.tagLabel;
+  if(node.children&&node.children.length){
+    return`${pad}${name}:\n${node.children.map(c=>nodeToTxt(c,indent+1)).join('\n')}`;
+  }
+  return`${pad}${name}: ${node.displayValue??''}`;
+}
+
+// ── BER serializer (client-side) ──────────────────────────────────────────────
+function encodeLength(len) {
+  if(len<128) return [len];
+  const arr=[];let n=len;while(n>0){arr.unshift(n&0xff);n>>=8;}
+  return [0x80|arr.length,...arr];
+}
+function serializeNode(node) {
+  let tagBytes;
+  if(node.tag<=30){
+    tagBytes=[(node.cls<<6)|(node.cons<<5)|node.tag];
+  }else{
+    const t=[];let tv=node.tag;while(tv>0){t.unshift(tv&0x7f);tv>>=7;}
+    for(let i=0;i<t.length-1;i++)t[i]|=0x80;
+    tagBytes=[(node.cls<<6)|(node.cons<<5)|0x1f,...t];
+  }
+  let valueBytes;
+  if(node.children&&node.children.length){
+    valueBytes=node.children.flatMap(serializeNode);
+  }else{
+    valueBytes=node.rawValue||[];
+  }
+  return [...tagBytes,...encodeLength(valueBytes.length),...valueBytes];
+}
+function serializeNodes(nodes) {
+  return new Uint8Array(nodes.flatMap(serializeNode));
+}
+
+// ── Context menu ──────────────────────────────────────────────────────────────
+function showContextMenu(x, y, node, row) {
+  const old = document.getElementById('ctx-menu');
+  if (old) old.remove();
+
+  const menu = document.createElement('div');
+  menu.id = 'ctx-menu';
+
+  const items = [];
+  if (!node.children.length) {
+    items.push({ label: '✏️  Bearbeiten',   action: () => openEditDialog(node, row) });
+    items.push({ label: '📋  Wert kopieren', action: () => navigator.clipboard.writeText(String(node.displayValue??'')) });
+  }
+  items.push({ label: '📋  Hex kopieren', action: () => {
+    const hex = (node.rawValue||[]).map(b=>b.toString(16).padStart(2,'0')).join(' ');
+    navigator.clipboard.writeText(hex);
+  }});
+  // SMS PDU decode: offer if field is named 'content' or rawValue looks like SMS PDU
+  if (!node.children.length && node.rawValue && node.rawValue.length >= 8) {
+    const fn = node.fieldName||'';
+    if (fn === 'content' || fn === 'national-SM-Content' || fn === 'sIPContent') {
+      items.push({ type: 'sep' });
+      items.push({ label: '📱  SMS dekodieren', action: () => showSmsDecode(node) });
+    }
+  }
+  if (node.children.length) {
+    items.push({ label: '⊞  Aufklappen',   action: () => setExpanded(row, node, true) });
+    items.push({ label: '⊟  Zuklappen',    action: () => setExpanded(row, node, false) });
+  }
+
+  for (const item of items) {
+    if (item.type === 'sep') {
+      const sep = document.createElement('div');
+      sep.style.cssText = 'height:1px;background:var(--border);margin:3px 0';
+      menu.appendChild(sep);
+      continue;
+    }
+    const el = document.createElement('div');
+    el.className = 'ctx-item';
+    el.textContent = item.label;
+    el.onclick = () => { menu.remove(); item.action(); };
+    menu.appendChild(el);
+  }
+
+  document.body.appendChild(menu);
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  menu.style.left = (x + mw > window.innerWidth  ? x - mw : x) + 'px';
+  menu.style.top  = (y + mh > window.innerHeight ? y - mh : y) + 'px';
+
+  const close = e => { if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('mousedown', close); } };
+  setTimeout(() => document.addEventListener('mousedown', close), 0);
+}
+
+// ── SMS PDU Decoder ───────────────────────────────────────────────────────────
+const GSM7_ALPHABET =
+  '@£$¥èéùìòÇ\nØø\rÅå' +
+  'Δ_ΦΓΛΩΠΨΣΘΞ\x1bÆæßÉ' +
+  ' !"#¤%&\'()*+,-./' +
+  '0123456789:;<=>?' +
+  '¡ABCDEFGHIJKLMNO' +
+  'PQRSTUVWXYZÄÖÑÜ§' +
+  '¿abcdefghijklmno' +
+  'pqrstuvwxyzäöñüà';
+
+function decodeBcdGsm(bcd, len) {
+  let s = '';
+  for (const b of bcd) {
+    s += (b & 0xf).toString();
+    const hi = (b >> 4) & 0xf;
+    if (hi !== 0xf && s.length < len) s += hi.toString();
+  }
+  return s.slice(0, len);
+}
+
+function decodeGsm7(data, numSeptets, shift) {
+  shift = shift || 0;
+  let buf = 0, bits = shift, result = '';
+  for (const byte of data) {
+    buf |= byte << bits; bits += 8;
+    while (bits >= 7) {
+      const idx = buf & 0x7f;
+      if (result.length < numSeptets)
+        result += idx < GSM7_ALPHABET.length ? GSM7_ALPHABET[idx] : '\uFFFD';
+      buf >>= 7; bits -= 7;
+    }
+  }
+  return result;
+}
+
+function decodeSmsPdu(rawBytes) {
+  const raw = rawBytes;
+  let pos = 0;
+  const result = {};
+  const errors = [];
+
+  try {
+    // Detect SMSC prefix: only skip it if second byte looks like a valid TON/NPI
+    // (common values: 0x91=international, 0x81=national, 0xa1, 0x11, 0x01)
+    // Avoids misinterpreting the TP byte as SMSC length
+    const VALID_TON_NPI = new Set([0x91, 0x81, 0xa1, 0x11, 0x01, 0xd0]);
+    const smscLen = raw[0];
+    if (smscLen > 0 && smscLen <= 12 && raw.length > smscLen + 1 && VALID_TON_NPI.has(raw[1])) {
+      const smscTon = raw[1];
+      const smscBcd = raw.slice(2, 1 + smscLen);
+      const smscDigits = decodeBcdGsm(smscBcd, smscBcd.length * 2);
+      const smscIntl = ((smscTon >> 4) & 0x7) === 1 ? '+' : '';
+      result.smsc = smscIntl + smscDigits.replace(/f/gi, '');
+      pos = 1 + smscLen;
+    }
+
+    if (pos >= raw.length) throw new Error('Too short after SMSC');
+
+    const bcd2 = b => (b & 0xf) * 10 + ((b >> 4) & 0xf);
+
+    // TP byte
+    const tp = raw[pos++];
+    const mti = tp & 0x03;
+    const udhi = (tp >> 6) & 1;
+    const mtiNames = ['SMS-DELIVER', 'SMS-SUBMIT', 'SMS-STATUS-REPORT', 'reserved'];
+    result.type = mtiNames[mti];
+
+    // SMS-STATUS-REPORT has completely different structure (no PID/DCS/text)
+    if (mti === 2) {
+      result.messageRef = raw[pos++]; // TP-MR
+      // TP-RA (Recipient Address)
+      const raLen = raw[pos++]; const raTon = raw[pos++];
+      const raBcd = raw.slice(pos, pos + Math.ceil(raLen / 2)); pos += Math.ceil(raLen / 2);
+      const raIntl = ((raTon >> 4) & 0x7) === 1 ? '+' : '';
+      result.to = raIntl + decodeBcdGsm(raBcd, raLen);
+      // TP-SCTS (send time)
+      if (pos + 7 <= raw.length) {
+        const s = raw.slice(pos, pos + 7); pos += 7;
+        const tz = bcd2(s[6] & ~0x08) * 15;
+        result.timestamp = `20${bcd2(s[0]).toString().padStart(2,'0')}-${bcd2(s[1]).toString().padStart(2,'0')}-${bcd2(s[2]).toString().padStart(2,'0')} ` +
+          `${bcd2(s[3]).toString().padStart(2,'0')}:${bcd2(s[4]).toString().padStart(2,'0')}:${bcd2(s[5]).toString().padStart(2,'0')} ` +
+          `${s[6]&0x08?'-':'+'}${Math.floor(tz/60).toString().padStart(2,'0')}:${(tz%60).toString().padStart(2,'0')}`;
+      }
+      // TP-DT (delivery time)
+      if (pos + 7 <= raw.length) {
+        const d = raw.slice(pos, pos + 7); pos += 7;
+        const tz = bcd2(d[6] & ~0x08) * 15;
+        result.deliveryTime = `20${bcd2(d[0]).toString().padStart(2,'0')}-${bcd2(d[1]).toString().padStart(2,'0')}-${bcd2(d[2]).toString().padStart(2,'0')} ` +
+          `${bcd2(d[3]).toString().padStart(2,'0')}:${bcd2(d[4]).toString().padStart(2,'0')}:${bcd2(d[5]).toString().padStart(2,'0')} ` +
+          `${d[6]&0x08?'-':'+'}${Math.floor(tz/60).toString().padStart(2,'0')}:${(tz%60).toString().padStart(2,'0')}`;
+      }
+      // TP-ST (status)
+      if (pos < raw.length) {
+        const st = raw[pos++];
+        const stMap = {0:'Zugestellt', 1:'Weitergeleitet', 2:'Ersetzt',
+          0x20:'Netz überlastet', 0x21:'Empfänger beschäftigt', 0x22:'Keine Antwort',
+          0x24:'Dienst abgelehnt', 0x40:'Ungültiges Ziel'};
+        result.status = stMap[st] ?? `0x${st.toString(16).padStart(2,'0')}`;
+      }
+      result.text = ''; // no text body
+      return { ...result, errors };
+    }
+
+    // SMS-DELIVER / SMS-SUBMIT: address
+    const addrLen = raw[pos++];
+    const addrTon = raw[pos++];
+    const addrBcd = raw.slice(pos, pos + Math.ceil(addrLen / 2)); pos += Math.ceil(addrLen / 2);
+    const addrIntl = ((addrTon >> 4) & 0x7) === 1 ? '+' : '';
+    result[mti === 1 ? 'to' : 'from'] = addrIntl + decodeBcdGsm(addrBcd, addrLen);
+
+    result.pid = `0x${raw[pos++].toString(16).padStart(2,'0')}`;
+
+    const dcs = raw[pos++];
+    const cg = (dcs >> 4) & 0xf;
+    let alpha = 0;
+    if (cg < 4) alpha = (dcs >> 2) & 0x03;
+    else if (cg === 0xf) alpha = (dcs >> 2) & 1;
+    result.dcs = `0x${dcs.toString(16).padStart(2,'0')} (${['GSM7','8-bit','UCS2','reserved'][alpha]})`;
+
+    // SCTS (SMS-DELIVER only; SMS-SUBMIT has VP instead)
+    if (mti === 0) {
+      const s = raw.slice(pos, pos + 7); pos += 7;
+      const tz = bcd2(s[6] & ~0x08) * 15;
+      result.timestamp = `20${bcd2(s[0]).toString().padStart(2,'0')}-${bcd2(s[1]).toString().padStart(2,'0')}-${bcd2(s[2]).toString().padStart(2,'0')} ` +
+        `${bcd2(s[3]).toString().padStart(2,'0')}:${bcd2(s[4]).toString().padStart(2,'0')}:${bcd2(s[5]).toString().padStart(2,'0')} ` +
+        `${s[6]&0x08?'-':'+'}${Math.floor(tz/60).toString().padStart(2,'0')}:${(tz%60).toString().padStart(2,'0')}`;
+    }
+
+    const udl = raw[pos++];
+    const ud = raw.slice(pos);
+
+    let udhLen = 0;
+    if (udhi && ud.length > 0) {
+      udhLen = ud[0] + 1;
+      let ui = 1;
+      while (ui < udhLen && ui + 1 < ud.length) {
+        const iei = ud[ui]; const iel = ud[ui + 1];
+        if (iei === 0x00 && iel >= 3 && ui + 4 < ud.length) {
+          result.fragment = `Teil ${ud[ui+4]}/${ud[ui+3]} (Ref=${ud[ui+2]})`;
+        }
+        ui += 2 + iel;
+      }
+    }
+
+    if (alpha === 0) {
+      result.text = decodeGsm7(ud.slice(udhLen), udl - (udhi ? Math.ceil(udhLen * 8 / 7) : 0),
+        udhi ? (udhLen * 8) % 7 : 0);
+    } else if (alpha === 1) {
+      result.text = new TextDecoder('latin1').decode(new Uint8Array(ud.slice(udhLen)));
+    } else if (alpha === 2) {
+      result.text = new TextDecoder('utf-16-be').decode(new Uint8Array(ud.slice(udhLen)));
+    } else {
+      result.text = '';
+    }
+  } catch (e) {
+    errors.push(e.message);
+  }
+
+  return { ...result, errors };
+}
+
+function showSmsDecode(node) {
+  const raw = node.rawValue || [];
+  const decoded = decodeSmsPdu(raw);
+
+  const existing = document.getElementById('edit-dialog');
+  if (existing) existing.remove();
+
+  const rows = [];
+  if (decoded.type)         rows.push(['Typ',            decoded.type]);
+  if (decoded.smsc)         rows.push(['SMSC',           decoded.smsc]);
+  if (decoded.from)         rows.push(['Von',            decoded.from]);
+  if (decoded.to)           rows.push(['An',             decoded.to]);
+  if (decoded.messageRef !== undefined) rows.push(['Ref', decoded.messageRef]);
+  if (decoded.timestamp)    rows.push(['Sendezeit',      decoded.timestamp]);
+  if (decoded.deliveryTime) rows.push(['Zustellzeit',    decoded.deliveryTime]);
+  if (decoded.status)       rows.push(['Status',         decoded.status]);
+  if (decoded.pid)          rows.push(['PID',            decoded.pid]);
+  if (decoded.dcs)          rows.push(['DCS',            decoded.dcs]);
+  if (decoded.fragment)     rows.push(['Fragment',       decoded.fragment]);
+  if (decoded.text)         rows.push(['Text',           decoded.text]);
+  if (decoded.errors?.length) rows.push(['⚠ Fehler',    decoded.errors.join(', ')]);
+
+  const tableHtml = rows.map(([k,v]) =>
+    `<tr><td style="color:var(--text-muted);padding:3px 12px 3px 0;white-space:nowrap">${k}</td>`+
+    `<td style="color:var(--green);word-break:break-all">${v}</td></tr>`
+  ).join('');
+
+  const dlg = document.createElement('div');
+  dlg.id = 'edit-dialog';
+  dlg.innerHTML = `
+    <div id="edit-overlay"></div>
+    <div id="edit-box" style="width:500px;max-height:80vh;overflow-y:auto">
+      <div id="edit-title">📱 SMS Inhalt
+        <span id="edit-type">${(node.fieldName||'')} · ${raw.length} B</span>
+      </div>
+      <table style="width:100%;border-collapse:collapse;margin:12px 0;font-size:12px">
+        ${tableHtml}
+      </table>
+      <div style="margin-top:8px;background:var(--bg-alt);border-radius:4px;padding:10px;font-size:13px;color:var(--green);word-break:break-all;white-space:pre-wrap">${decoded.text ?? '(kein Text)'}</div>
+      <div id="edit-buttons" style="margin-top:12px">
+        <button id="edit-cancel">Schließen</button>
+        <button id="edit-ok" onclick="navigator.clipboard.writeText(${JSON.stringify(decoded.text??'')})">Text kopieren</button>
+      </div>
+    </div>`;
+  document.body.appendChild(dlg);
+  dlg.querySelector('#edit-cancel').onclick = () => dlg.remove();
+  dlg.querySelector('#edit-overlay').onclick = () => dlg.remove();
+  dlg.querySelector('#edit-ok').onclick = () => {
+    navigator.clipboard.writeText(decoded.text ?? '');
+    statusLeft.textContent = 'SMS-Text kopiert';
+    dlg.remove();
+  };
+}
+
+// ── Edit dialog ───────────────────────────────────────────────────────────────
+function openEditDialog(node, row) {
+  // Remove any existing dialog
+  const existing = document.getElementById('edit-dialog');
+  if(existing) existing.remove();
+
+  const isHex = node.rawValue && !isTextPrimitive(node);
+  const currentVal = isHex
+    ? Array.from(node.rawValue).map(b => b.toString(16).padStart(2,'0')).join(' ')
+    : (node.displayValue ?? '');
+
+  const dlg = document.createElement('div');
+  dlg.id = 'edit-dialog';
+  dlg.innerHTML = `
+    <div id="edit-overlay"></div>
+    <div id="edit-box">
+      <div id="edit-title">${node.fieldName||node.tagLabel}
+        <span id="edit-type">${node.typeName||''}</span>
+      </div>
+      <div id="edit-hint">${isHex ? 'Hex bytes (space-separated)' : 'Text value'}</div>
+      <textarea id="edit-input" spellcheck="false">${currentVal}</textarea>
+      <div id="edit-buttons">
+        <button id="edit-cancel">Cancel</button>
+        <button id="edit-ok">Apply</button>
+      </div>
+      <div id="edit-error"></div>
+    </div>
+  `;
+  document.body.appendChild(dlg);
+
+  const input  = dlg.querySelector('#edit-input');
+  const errDiv = dlg.querySelector('#edit-error');
+  input.focus(); input.select();
+
+  dlg.querySelector('#edit-cancel').onclick = () => dlg.remove();
+  dlg.querySelector('#edit-overlay').onclick = () => dlg.remove();
+
+  dlg.querySelector('#edit-ok').onclick = () => {
+    const raw = applyEdit(node, input.value.trim(), isHex, errDiv);
+    if(raw === null) return;
+    node.rawValue = raw;
+    node.displayValue = recomputeDisplayValue(node);
+    // Mark as changed
+    node._modified = true;
+    hasChanges = true;
+    updateTitle();
+    // Update row value cell
+    const valCell = row.querySelector('.col-value');
+    if(valCell){
+      valCell.textContent = String(node.displayValue).slice(0,120);
+      valCell.style.color = 'var(--orange)';
+    }
+    row.classList.add('modified');
+    dlg.remove();
+    statusLeft.textContent = `Modified: ${node.fieldName||node.tagLabel}`;
+  };
+
+  // Enter to confirm (Shift+Enter for newline in textarea)
+  input.addEventListener('keydown', e => {
+    if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); dlg.querySelector('#edit-ok').click(); }
+    if(e.key==='Escape') dlg.remove();
+  });
+}
+
+function isTextPrimitive(node) {
+  // UNIVERSAL string/time tags
+  if (node.cls === 0 && [12,19,22,26,30,23,24].includes(node.tag)) return true;
+  // Check raw bytes: if all printable ASCII → treat as text
+  if (node.rawValue && node.rawValue.length > 0) {
+    const allPrintable = node.rawValue.every(b => b >= 0x20 && b <= 0x7e);
+    if (allPrintable) return true;
+  }
+  // Fallback: displayValue looks like readable text (no leading 0x)
+  const s = node.displayValue;
+  if (typeof s === 'string' && !s.startsWith('0x') && !/^\d+,\s+0x/.test(s)) return true;
+  return false;
+}
+
+function applyEdit(node, inputVal, isHex, errDiv) {
+  errDiv.textContent = '';
+  if(isHex){
+    // Parse hex string
+    const hexStr = inputVal.replace(/\s+/g,'');
+    if(!/^[0-9a-fA-F]*$/.test(hexStr)||hexStr.length%2!==0){
+      errDiv.textContent='Invalid hex — use pairs like: 30 31 32 or 303132';
+      return null;
+    }
+    const bytes=[];
+    for(let i=0;i<hexStr.length;i+=2) bytes.push(parseInt(hexStr.slice(i,i+2),16));
+    return bytes;
+  } else {
+    // Text → encode as UTF-8 bytes
+    return Array.from(new TextEncoder().encode(inputVal));
+  }
+}
+
+function recomputeDisplayValue(node) {
+  const raw = node.rawValue || [];
+  const buf = new Uint8Array(raw);
+  if(node.cls===0){
+    if(node.tag===2){ // INTEGER
+      let v=0n; for(const b of buf)v=(v<<8n)|BigInt(b);
+      if(buf[0]&0x80)v-=(1n<<BigInt(buf.length*8));
+      const vn=Number(v); return`${vn},  0x${vn.toString(16)}`;
+    }
+    if([12,19,22,26,30,23,24].includes(node.tag)) return new TextDecoder().decode(buf);
+    if(node.tag===6){ // OID – simplified
+      return '0x'+Array.from(buf).map(b=>b.toString(16).padStart(2,'0')).join('');
+    }
+  }
+  // Default: printable string or hex
+  const s=new TextDecoder().decode(buf);
+  if([...s].every(c=>{const cc=c.charCodeAt(0);return cc>=32&&cc<127;})) return s;
+  const hex=Array.from(buf).map(b=>b.toString(16).padStart(2,'0')).join('');
+  return raw.length<=16?'0x'+hex:`0x${hex.slice(0,32)}… (${raw.length} B)`;
+}
 
 // ── Tree building ─────────────────────────────────────────────────────────────
 function buildTree(nodes) {
   treeBody.innerHTML = '';
   allNodes = [];
   renderNodes(nodes, treeBody, 0);
-  // Expand first 3 levels by default
-  allNodes.forEach(({row, node}) => {
-    if (node._depth <= 2 && node.children.length)
-      setExpanded(row, node, true);
+  allNodes.forEach(({row,node}) => {
+    if(node._depth<=2&&node.children.length) setExpanded(row,node,true);
   });
 }
 
 function renderNodes(nodes, container, depth) {
-  for (const node of nodes) {
-    node._depth = depth;
-    node._expanded = false;
-
+  for(const node of nodes){
+    node._depth = depth; node._expanded = false;
     const row = document.createElement('div');
-    row.className = 'tree-row';
-    row.dataset.depth = depth;
-
-    // Indent
+    row.className = 'tree-row' + (node._modified?' modified':'');
     const indent = document.createElement('div');
-    indent.className = 'row-indent';
-    indent.style.width = (depth * 16 + 4) + 'px';
-
-    // Arrow
+    indent.style.cssText=`width:${depth*16+4}px;flex-shrink:0;display:flex;align-items:center`;
     const arrow = document.createElement('span');
-    arrow.className = 'expand-arrow' + (node.children.length ? '' : ' leaf');
-    arrow.textContent = node.children.length ? '▶' : ' ';
-    arrow.addEventListener('click', e => {
-      e.stopPropagation();
-      toggleNode(row, node);
-    });
-    indent.appendChild(arrow);
-    row.appendChild(indent);
+    arrow.className='expand-arrow'+(node.children.length?'':' leaf');
+    arrow.textContent=node.children.length?'▶':' ';
+    arrow.onclick=e=>{e.stopPropagation();toggleNode(node);};
+    indent.appendChild(arrow); row.appendChild(indent);
 
-    // Offset
-    row.appendChild(makeCell('col-offset', `${node.offset.toString(16).padStart(6,'0')}`));
+    row.appendChild(makeCell('col-offset', node.offset.toString(16).padStart(6,'0')));
+    const tc=makeCell('col-tag',node.tagLabel); if(node.cls===0)tc.classList.add('univ'); row.appendChild(tc);
+    row.appendChild(makeCell('col-name', node.fieldName||node.typeName||node.tagLabel));
+    let vt='',dim=false;
+    if(node.displayValue!=null) vt=String(node.displayValue).slice(0,120);
+    else if(node.children.length){vt=`${node.typeName||'CONSTRUCTED'} (${node.length} B)`;dim=true;}
+    const vc=makeCell('col-value',vt); if(dim)vc.classList.add('dim');
+    if(node._modified) vc.style.color='var(--orange)';
+    row.appendChild(vc);
+    row.appendChild(makeCell('col-size',node.length.toString(16)));
 
-    // Tag
-    const tagCell = makeCell('col-tag', node.tagLabel);
-    if (node.cls === 0) tagCell.classList.add('univ');
-    row.appendChild(tagCell);
-
-    // Field / type name
-    const nameText = node.fieldName || node.typeName || node.tagLabel;
-    row.appendChild(makeCell('col-name', nameText));
-
-    // Value
-    let valText = '', valDim = false;
-    if (node.displayValue !== null && node.displayValue !== undefined) {
-      valText = String(node.displayValue).slice(0, 120);
-      if (valText.length < String(node.displayValue).length) valText += '…';
-    } else if (node.children.length) {
-      const t = node.typeName || (node.cls === 0 ? 'SEQUENCE' : 'CONSTRUCTED');
-      valText = `${t}  (${node.length} B)`;
-      valDim = true;
+    // Single click = select, Double click = edit (primitives only)
+    row.onclick = () => selectRow(row, node);
+    if(!node.children.length){
+      row.ondblclick = e => { e.stopPropagation(); openEditDialog(node, row); };
+      row.title = 'Double-click to edit';
     }
-    const valCell = makeCell('col-value', valText);
-    if (valDim) valCell.classList.add('dim');
-    row.appendChild(valCell);
 
-    // Size
-    row.appendChild(makeCell('col-size', node.length.toString(16)));
+    // Right-click context menu
+    row.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      selectRow(row, node);
+      showContextMenu(e.clientX, e.clientY, node, row);
+    });
 
-    // Click to select
-    row.addEventListener('click', () => selectRow(row, node));
-
-    // Child container (lazy)
-    const childContainer = document.createElement('div');
-    childContainer.style.display = 'none';   // hidden by default via style, not class
-    childContainer.dataset.children = 'true';
-
-    row._node          = node;
-    row._arrow         = arrow;
-    row._childContainer = childContainer;
-
-    container.appendChild(row);
-    container.appendChild(childContainer);
-    allNodes.push({row, node});
-
-    // Pre-render children (hidden)
-    if (node.children.length)
-      renderNodes(node.children, childContainer, depth + 1);
+    const cc=document.createElement('div'); cc.style.display='none'; cc.dataset.children='true';
+    row._node=node; row._arrow=arrow; row._childContainer=cc;
+    container.appendChild(row); container.appendChild(cc);
+    allNodes.push({row,node});
+    if(node.children.length) renderNodes(node.children,cc,depth+1);
   }
 }
 
-function makeCell(cls, text) {
-  const el = document.createElement('span');
-  el.className = cls;
-  el.textContent = text;
-  el.title = text;
-  return el;
+function makeCell(cls,text){
+  const el=document.createElement('span');
+  el.className=cls; el.textContent=text; el.title=text; return el;
 }
 
 // ── Expand / collapse ─────────────────────────────────────────────────────────
-function toggleNode(row, node, forceTo) {
-  if (!node.children.length) return;
-  const expand = forceTo !== undefined ? forceTo : !node._expanded;
+function toggleNode(node, forceTo) {
+  if(!node.children.length) return;
+  const {row} = allNodes.find(x=>x.node===node)||{};
+  if(!row) return;
+  const expand = forceTo!==undefined ? forceTo : !node._expanded;
   setExpanded(row, node, expand);
 }
-
 function setExpanded(row, node, expand) {
-  node._expanded = expand;
-  row._arrow.textContent = expand ? '▾' : '▶';
-  row._arrow.classList.toggle('open', expand);
-  // Use style.display directly — avoids conflict with .hidden { !important }
-  row._childContainer.style.display = expand ? 'block' : 'none';
+  node._expanded=expand;
+  row._arrow.textContent=expand?'▾':'▶';
+  row._childContainer.style.display=expand?'block':'none';
 }
-
-function expandAll() {
-  allNodes.forEach(({row, node}) => {
-    if (node.children.length) setExpanded(row, node, true);
-  });
-}
-
-function collapseAll() {
-  allNodes.forEach(({row, node}) => {
-    if (node.children.length) setExpanded(row, node, false);
-  });
-  // Keep top level open
-  allNodes.filter(({node}) => node._depth === 0)
-         .forEach(({row, node}) => {
-           if (node.children.length) setExpanded(row, node, true);
-         });
-}
+function expandAll()  { allNodes.forEach(({row,node})=>{ if(node.children.length) setExpanded(row,node,true); }); }
+function collapseAll(){ allNodes.forEach(({row,node})=>{ if(node.children.length) setExpanded(row,node,false); });
+  allNodes.filter(({node})=>node._depth===0).forEach(({row,node})=>{ if(node.children.length) setExpanded(row,node,true); }); }
 
 // ── Selection ─────────────────────────────────────────────────────────────────
 function selectRow(row, node) {
-  if (selectedRow) selectedRow.classList.remove('selected');
-  selectedRow = row;
-  row.classList.add('selected');
+  if(selectedRow) selectedRow.classList.remove('selected');
+  selectedRow=row; row.classList.add('selected');
   showDetail(node);
 }
-
 function moveSelection(dir) {
-  const visible = allNodes
-    .filter(({row}) => !row.closest('[data-children].hidden'))
-    .map(({row}) => row);
-  const idx = visible.indexOf(selectedRow);
-  if (idx === -1) return;
-  const next = visible[idx + dir];
-  if (next) { next.click(); next.scrollIntoView({block:'nearest'}); }
+  const visible=allNodes.filter(({row})=>row.offsetParent!==null).map(({row})=>row);
+  const idx=visible.indexOf(selectedRow); if(idx===-1)return;
+  const next=visible[idx+dir]; if(next){next.click();next.scrollIntoView({block:'nearest'});}
 }
 
 // ── Detail panel ──────────────────────────────────────────────────────────────
 function showDetail(node) {
-  const cls = ['Universal','Application','Context','Private'][node.cls];
-  const field = node.fieldName || '—';
-  const type  = node.typeName  || '—';
-  detailInfobar.textContent =
-    `Offset: 0x${node.offset.toString(16).padStart(4,'0')}  │  ` +
-    `Tag: ${node.tagLabel}  │  ${cls}  │  ` +
-    `${node.cons ? 'Constructed' : 'Primitive'}  │  ` +
-    `Length: ${node.length} (0x${node.length.toString(16)})  │  ` +
-    `Field: ${field}  │  Type: ${type}`;
+  const infobar = document.getElementById('detail-infobar');
+  const valDiv  = document.getElementById('detail-value');
+  const hexDiv  = document.getElementById('detail-hex');
+  const cls=['Universal','Application','Context','Private'][node.cls];
+  infobar.textContent =
+    `Offset: 0x${node.offset.toString(16).padStart(4,'0')}  │  Tag: ${node.tagLabel}  │  ${cls}  │  `+
+    `${node.cons?'Constructed':'Primitive'}  │  Length: ${node.length} (0x${node.length.toString(16)})  │  `+
+    `Field: ${node.fieldName||'—'}  │  Type: ${node.typeName||'—'}`+
+    (node._modified ? '  │  ⚠ MODIFIED' : '');
 
-  if (node.displayValue !== null && node.displayValue !== undefined) {
-    detailValue.textContent = String(node.displayValue);
-  } else if (node.children.length) {
-    const t = node.typeName || 'CONSTRUCTED';
-    detailValue.textContent = `${t} — ${node.children.length} field(s), ${node.length} bytes`;
-  } else {
-    detailValue.textContent = '';
-  }
+  valDiv.textContent = node.displayValue!=null ? String(node.displayValue)
+    : (node.children.length ? `${node.typeName||'CONSTRUCTED'} — ${node.children.length} field(s)` : '');
+  if(node._modified) valDiv.style.color='var(--orange)'; else valDiv.style.color='';
 
-  // Hex dump
-  detailHex.innerHTML = '';
-  if (node.hexDump && node.hexDump.length) {
-    for (const {offset, hex, ascii} of node.hexDump) {
-      const line = document.createElement('div');
-      line.className = 'hex-line';
-
-      const o = document.createElement('span'); o.className = 'hex-offset'; o.textContent = offset;
-      const h = document.createElement('span'); h.className = 'hex-bytes';  h.textContent = hex;
-      const a = document.createElement('span'); a.className = 'hex-ascii';  a.textContent = ascii;
-      line.appendChild(o); line.appendChild(h); line.appendChild(a);
-      detailHex.appendChild(line);
+  hexDiv.innerHTML='';
+  if(node.hexDump){
+    for(const {offset,hex,ascii} of node.hexDump){
+      const line=document.createElement('div'); line.className='hex-line';
+      const o=document.createElement('span');o.className='hex-offset';o.textContent=offset;
+      const h=document.createElement('span');h.className='hex-bytes'; h.textContent=hex;
+      const a=document.createElement('span');a.className='hex-ascii'; a.textContent=ascii;
+      line.appendChild(o);line.appendChild(h);line.appendChild(a);hexDiv.appendChild(line);
     }
   }
 }
-
 function clearDetail() {
-  detailInfobar.textContent = 'Select a field to inspect';
-  detailValue.textContent = '';
-  detailHex.innerHTML = '';
+  document.getElementById('detail-infobar').textContent='Select a field to inspect';
+  document.getElementById('detail-value').textContent='';
+  document.getElementById('detail-hex').innerHTML='';
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
 function searchNext() {
-  const q = searchInput.value.trim().toLowerCase();
-  if (!q) return;
-
-  // Collect all matching rows
-  const matches = allNodes.filter(({row, node}) => {
-    const name = (node.fieldName || node.typeName || node.tagLabel || '').toLowerCase();
-    const val  = String(node.displayValue ?? '').toLowerCase();
-    return name.includes(q) || val.includes(q);
+  const q=searchInput.value.trim().toLowerCase(); if(!q)return;
+  const matches=allNodes.filter(({node})=>{
+    const name=(node.fieldName||node.typeName||node.tagLabel||'').toLowerCase();
+    const val=String(node.displayValue??'').toLowerCase();
+    return name.includes(q)||val.includes(q);
   });
-
-  // Clear previous highlights
-  allNodes.forEach(({row}) => row.classList.remove('search-match'));
-
-  if (!matches.length) {
-    statusLeft.textContent = `No results for "${q}"`;
-    return;
-  }
-
-  matches.forEach(({row}) => row.classList.add('search-match'));
-  searchIdx = searchIdx % matches.length;
-  const {row, node} = matches[searchIdx];
-
-  // Ensure visible: expand parents
-  ensureVisible(row);
-  row.scrollIntoView({ block: 'center' });
-  selectRow(row, node);
-
-  statusLeft.textContent = `Match ${searchIdx + 1}/${matches.length} for "${q}"`;
-  searchIdx = (searchIdx + 1) % matches.length;
+  allNodes.forEach(({row})=>row.classList.remove('search-match'));
+  if(!matches.length){statusLeft.textContent=`No results for "${q}"`;return;}
+  matches.forEach(({row})=>row.classList.add('search-match'));
+  searchIdx=searchIdx%matches.length;
+  const {row,node}=matches[searchIdx];
+  ensureVisible(row); row.scrollIntoView({block:'center'}); selectRow(row,node);
+  statusLeft.textContent=`Match ${searchIdx+1}/${matches.length} for "${q}"`;
+  searchIdx=(searchIdx+1)%matches.length;
 }
-
 function ensureVisible(targetRow) {
-  let el = targetRow.parentElement;
-  while (el && el !== treeBody) {
-    if (el.dataset.children === 'true') {
-      el.style.display = 'block';
-      const prev = el.previousElementSibling;
-      if (prev && prev._node) {
-        setExpanded(prev, prev._node, true);
-      }
+  let el=targetRow.parentElement;
+  while(el&&el!==treeBody){
+    if(el.dataset.children==='true'){
+      el.style.display='block';
+      const prev=el.previousElementSibling;
+      if(prev&&prev._node) setExpanded(prev,prev._node,true);
     }
-    el = el.parentElement;
+    el=el.parentElement;
   }
 }
 
 // ── Resizable splitter ────────────────────────────────────────────────────────
-let resizing = false, resizeStartX = 0, resizeStartW = 0;
-
-resizeHandle.addEventListener('mousedown', e => {
-  resizing = true;
-  resizeStartX = e.clientX;
-  resizeStartW = treePanel.getBoundingClientRect().width;
-  resizeHandle.classList.add('dragging');
-  document.body.style.cursor = 'col-resize';
-  document.body.style.userSelect = 'none';
+let resizing=false,resizeStartX=0,resizeStartW=0;
+resizeHandle.addEventListener('mousedown',e=>{
+  resizing=true;resizeStartX=e.clientX;resizeStartW=treePanel.getBoundingClientRect().width;
+  resizeHandle.classList.add('dragging');document.body.style.cursor='col-resize';document.body.style.userSelect='none';
 });
-
-document.addEventListener('mousemove', e => {
-  if (!resizing) return;
-  const delta = e.clientX - resizeStartX;
-  const newW  = Math.max(300, Math.min(window.innerWidth - 300, resizeStartW + delta));
-  treePanel.style.width = newW + 'px';
+document.addEventListener('mousemove',e=>{
+  if(!resizing)return;
+  const newW=Math.max(200,Math.min(window.innerWidth-200,resizeStartW+(e.clientX-resizeStartX)));
+  treePanel.style.width=newW+'px';
 });
-
-document.addEventListener('mouseup', () => {
-  if (!resizing) return;
-  resizing = false;
-  resizeHandle.classList.remove('dragging');
-  document.body.style.cursor = '';
-  document.body.style.userSelect = '';
+document.addEventListener('mouseup',()=>{
+  if(!resizing)return;resizing=false;resizeHandle.classList.remove('dragging');
+  document.body.style.cursor='';document.body.style.userSelect='';
 });

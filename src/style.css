@@ -307,3 +307,90 @@ button { cursor: pointer; border: none; outline: none; }
 /* NOTE: no !important on .hidden so style.display can override */
 .hidden  { display: none; }
 .visible { display: flex; }
+
+/* ── Modified rows ────────────────────────────────────────────────────────── */
+:root { --orange: #e5a050; }
+.tree-row.modified .col-value { color: var(--orange) !important; }
+.tree-row.modified .col-name  { color: var(--orange); }
+
+/* ── Edit dialog ──────────────────────────────────────────────────────────── */
+#edit-dialog { position: fixed; inset: 0; z-index: 1000; }
+
+#edit-overlay {
+  position: absolute; inset: 0;
+  background: rgba(0,0,0,.6);
+}
+
+#edit-box {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 480px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.5);
+  display: flex; flex-direction: column; gap: 10px;
+}
+
+#edit-title {
+  font-size: 14px; font-weight: bold; color: var(--accent);
+}
+#edit-type {
+  font-size: 11px; color: var(--text-muted);
+  font-weight: normal; margin-left: 8px;
+}
+#edit-hint { font-size: 11px; color: var(--text-muted); }
+
+#edit-input {
+  width: 100%; height: 80px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--green);
+  font-family: inherit; font-size: 13px;
+  padding: 8px; resize: vertical; outline: none;
+}
+#edit-input:focus { border-color: var(--accent); }
+
+#edit-buttons { display: flex; justify-content: flex-end; gap: 8px; }
+
+#edit-cancel {
+  padding: 5px 16px; background: var(--bg-alt);
+  border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text); font-family: inherit; cursor: pointer;
+}
+#edit-cancel:hover { border-color: var(--text-dim); }
+
+#edit-ok {
+  padding: 5px 16px; background: var(--accent);
+  border: none; border-radius: 4px;
+  color: #fff; font-family: inherit; font-weight: bold; cursor: pointer;
+}
+#edit-ok:hover { background: #5aadff; }
+
+#edit-error { color: var(--red, #e06c75); font-size: 11px; min-height: 16px; }
+
+/* ── Context menu ─────────────────────────────────────────────────────────── */
+#ctx-menu {
+  position: fixed;
+  z-index: 2000;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 0;
+  min-width: 180px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.5);
+}
+.ctx-item {
+  padding: 6px 16px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.ctx-item:hover {
+  background: var(--sel-bg);
+  color: var(--accent);
+}
