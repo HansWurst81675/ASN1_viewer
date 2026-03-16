@@ -23,6 +23,46 @@ npm start
 
 ---
 
+## Build
+
+### Windows Installer
+
+```cmd
+npm run build:win
+```
+
+→ `dist\BER Viewer Setup x.x.x.exe`  
+Oder ohne Installation: `dist\win-unpacked\BER Viewer.exe`
+
+### Linux AppImage (Ubuntu / Linux Mint)
+
+```bash
+# Node.js 20 LTS installieren (falls noch nicht vorhanden)
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+
+# System-Abhängigkeiten für Electron
+sudo apt install -y libgconf-2-4 libatk1.0-0 libatk-bridge2.0-0 \
+    libgdk-pixbuf2.0-0 libgtk-3-0 libgbm-dev libnss3 libasound2 \
+    fuse libfuse2
+
+# Build
+npm install
+npm run build:linux
+```
+
+→ `dist/BER Viewer-x.x.x.AppImage`
+
+```bash
+chmod +x "dist/BER Viewer-x.x.x.AppImage"
+./"dist/BER Viewer-x.x.x.AppImage"
+
+# Falls FUSE-Fehler:
+./"dist/BER Viewer-x.x.x.AppImage" --no-sandbox
+```
+
+---
+
 ## Projektstruktur
 
 ```
@@ -156,11 +196,9 @@ Beim Start werden alle `*.asn` / `*.asn1`-Dateien aus `asn1_patched/` geladen un
 
 ---
 
-## Build (optional)
+## Entwicklung (ohne Build)
 
 ```bash
-# Windows-Installer (NSIS)
-npm run dist
+# Direkt starten ohne Installer
+npm start
 ```
-
-Für macOS/Linux muss `build.targets` in `package.json` angepasst werden.
