@@ -257,13 +257,25 @@ function showContextMenu(x, y, node, row) {
     const hex = (node.rawValue||[]).map(b=>b.toString(16).padStart(2,'0')).join(' ');
     navigator.clipboard.writeText(hex);
   }});
-  // SMS PDU decode: offer if field is named 'content' or rawValue looks like SMS PDU
-  if (!node.children.length && node.rawValue && node.rawValue.length >= 8) {
-    const fn = node.fieldName||'';
-    if (fn === 'content' || fn === 'national-SM-Content' || fn === 'sIPContent') {
-      items.push({ type: 'sep' });
-      items.push({ label: '📱  SMS dekodieren', action: () => showSmsDecode(node) });
+  // SMS PDU decode: offer for content fields and sMSTPDU/sMSTPDUData fields
+  const smsFieldNames = new Set(['content', 'national-SM-Content', 'sIPContent',
+    'sMSTPDU', 'truncatedSMSTPDU']);
+  const smsTpduNode = (() => {
+    // Direct OCTET field (sMSTPDU, content, …)
+    if (!node.children.length && node.rawValue && node.rawValue.length >= 8) {
+      if (smsFieldNames.has(node.fieldName||'')) return node;
     }
+    // Container node (sMSTPDUData) with one child that is the actual OCTET
+    if (node.children.length === 1) {
+      const child = node.children[0];
+      if (!child.children.length && child.rawValue && child.rawValue.length >= 8 &&
+          smsFieldNames.has(child.fieldName||'')) return child;
+    }
+    return null;
+  })();
+  if (smsTpduNode) {
+    items.push({ type: 'sep' });
+    items.push({ label: '📱  SMS dekodieren', action: () => showSmsDecode(smsTpduNode) });
   }
   if (node.children.length) {
     items.push({ label: '⊞  Aufklappen',   action: () => setExpanded(row, node, true) });
