@@ -23,9 +23,53 @@ const resizeHandle = document.getElementById('resize-handle');
 
 // ── Schema info ───────────────────────────────────────────────────────────────
 window.berApi.getSchemaInfo().then(info => {
-  statusRight.textContent = info.typeCount > 0
-    ? `Schema: ${info.typeCount} types` : 'Schema: not loaded';
+  const typeStr = info.typeCount > 0 ? `Schema: ${info.typeCount} types` : 'Schema: not loaded';
+  const verStr  = info.version ? `v${info.version}` : '';
+  statusRight.textContent = [verStr, typeStr].filter(Boolean).join('  |  ');
 });
+
+// ── Spec detection from domain OID ────────────────────────────────────────────
+function specFromOid(oid) {
+  if (!oid) return null;
+  const p = oid.split('.');
+  // All LI OIDs start with 0.4.0.2.2
+  if (p[0]==='0'&&p[1]==='4'&&p[2]==='0'&&p[3]==='2'&&p[4]==='2') {
+    const domain=p[5], sub=p[6], rel=p[7], ver=p[8];
+    if (domain === '5') {
+      // ETSI TS 102 232 series — 0.4.0.2.2.5.[sub].[version]
+      // version byte: e.g. 24="v2.4", 29="v2.9", 36="v3.6", 40="v4.0"
+      const specMap = {'1':'ETSI TS 102 232-1','2':'ETSI TS 102 232-2',
+        '3':'ETSI TS 102 232-3','5':'ETSI TS 102 232-5','6':'ETSI TS 102 232-6'};
+      const spec = specMap[sub] || `ETSI TS 102 232 (li-ps/${sub})`;
+      const vn = Number(rel);  // rel = p[7] = version byte
+      const vstr = rel ? ` v${Math.floor(vn/10)}.${vn%10}` : '';
+      return `${spec}${vstr}`;
+    }
+    if (domain === '4') {
+      // 3GPP — 0.4.0.2.2.4.[sub].[release].[version]
+      const subNum = Number(sub);
+      if (subNum === 1)  return `ETSI TS 101 671 / 3GPP TS 33.108 (HI2)`;
+      if (subNum === 3)  return `3GPP TS 33.108 r${rel||'?'} (UmtsCS HI2)`;
+      if (subNum === 8)  return `3GPP TS 33.108 r${rel||'?'} (EPS HI2)`;
+      if (subNum === 9)  return `3GPP TS 33.108 r${rel||'?'} (EPS HI3)`;
+      if (subNum === 19) return `3GPP TS 33.128 r${rel||'?'} v${ver||'?'} (5G NR)`;
+      return `3GPP TS 33.108 (sub=${sub})`;
+    }
+  }
+  return null;
+}
+
+function findDomainOid(nodes) {
+  for (const n of nodes) {
+    if (n.fieldName && n.fieldName.toLowerCase().includes('domainid') && n.displayValue)
+      return String(n.displayValue);
+    if (n.fieldName === 'iPMMIRIObjId' && n.displayValue)
+      return String(n.displayValue);
+    const r = findDomainOid(n.children);
+    if (r) return r;
+  }
+  return null;
+}
 
 // ── File loading ──────────────────────────────────────────────────────────────
 window.berApi.onFileLoaded(data => {
@@ -36,6 +80,17 @@ window.berApi.onFileLoaded(data => {
   buildTree(data.nodes);
   fileInfo.textContent = `${data.fileName}  —  ${data.size} bytes`;
   statusLeft.textContent = `${data.fileName}  |  ${data.size} bytes  |  ${countNodes(data.nodes)} fields`;
+
+  // Detect spec from embedded domain OID and update right status
+  const domainOid = findDomainOid(data.nodes);
+  const spec = specFromOid(domainOid);
+  window.berApi.getSchemaInfo().then(info => {
+    const typeStr = info.typeCount > 0 ? `Schema: ${info.typeCount} types` : 'Schema: not loaded';
+    const verStr  = info.version ? `v${info.version}` : '';
+    const parts   = [spec, verStr, typeStr].filter(Boolean);
+    statusRight.textContent = parts.join('  |  ');
+  });
+
   dropOverlay.classList.add('hidden');
   splitterCont.classList.remove('hidden');
   clearDetail();
