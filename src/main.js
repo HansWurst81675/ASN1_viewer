@@ -786,7 +786,7 @@ function loadFile(filePath) {
 // ── IPC handlers ──────────────────────────────────────────────────────────────
 ipcMain.handle('open-file-dialog', openFile);
 ipcMain.handle('open-file-path', (_, p) => loadFile(p));
-ipcMain.handle('get-schema-info', () => ({ typeCount: Object.keys(tagMaps).length, asn1Dir: getAsn1Dir() }));
+ipcMain.handle('get-schema-info', () => ({ typeCount: Object.keys(tagMaps).length, asn1Dir: getAsn1Dir(), version: app.getVersion() }));
 ipcMain.handle('get-recent-files', () => recentFiles);
 ipcMain.handle('clear-recent-files', () => { recentFiles=[]; saveRecent(); rebuildMenu(); });
 
