@@ -809,11 +809,385 @@ function showDetail(node) {
       line.appendChild(o);line.appendChild(h);line.appendChild(a);hexDiv.appendChild(line);
     }
   }
+
+  // Show map if this is a geo coordinate field
+  showMapForNode(node);
 }
 function clearDetail() {
   document.getElementById('detail-infobar').textContent='Select a field to inspect';
   document.getElementById('detail-value').textContent='';
   document.getElementById('detail-hex').innerHTML='';
+  document.getElementById('map-section').classList.add('hidden');
+  document.getElementById('map-coords').textContent='';
+  disposeMapState();
+}
+
+// ── Map / Coordinates ─────────────────────────────────────────────────────────
+let mapState = null;  // { lat, lon, zoom, centerX, centerY, dragging, active }
+
+// Parse any coordinate string format → decimal degrees (null if unrecognised)
+function parseCoordValue(s) {
+  if (!s || typeof s !== 'string') return null;
+  s = s.trim();
+
+  // 1. GSM DDMMSS format: N505723 / E0070202 / N510344.38
+  const gsmM = s.match(/^([NSEWnsew])(\d{2,3})(\d{2})(\d{2}(?:[.,]\d+)?)$/);
+  if (gsmM) {
+    const [, dir, deg, min, sec] = gsmM;
+    let dd = parseInt(deg) + parseInt(min)/60 + parseFloat(sec.replace(',','.'))/3600;
+    if (dir.toUpperCase() === 'S' || dir.toUpperCase() === 'W') dd = -dd;
+    return dd;
+  }
+
+  // 2. Decimal degrees: "50.964444" / "-6.806111" / "+50.964444"
+  const decM = s.match(/^([+-]?\d{1,3}(?:\.\d+)?)$/);
+  if (decM) {
+    const v = parseFloat(decM[1]);
+    if (!isNaN(v) && v >= -180 && v <= 180) return v;
+  }
+
+  return null;
+}
+// Keep old name as alias for backward compatibility
+const parseGsmCoord = parseCoordValue;
+
+function latLonToTileExact(lat, lon, zoom) {
+  const n = Math.pow(2, zoom);
+  const x = (lon + 180) / 360 * n;
+  const latRad = lat * Math.PI / 180;
+  const y = (1 - Math.log(Math.tan(latRad) + 1/Math.cos(latRad)) / Math.PI) / 2 * n;
+  return { x, y };
+}
+
+function tileToLatLon(tx, ty, zoom) {
+  const n = Math.pow(2, zoom);
+  const lon = tx / n * 360 - 180;
+  const latRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * ty / n)));
+  return { lat: latRad * 180 / Math.PI, lon };
+}
+
+// Tile image cache
+const tileCache = new Map();
+async function getTileImage(z, x, y) {
+  const key = `${z}/${x}/${y}`;
+  if (tileCache.has(key)) return tileCache.get(key);
+  const dataUrl = await window.berApi.fetchOsmTile(z, x, y);
+  if (!dataUrl) return null;
+  const img = new Image();
+  await new Promise(res => { img.onload = res; img.onerror = res; img.src = dataUrl; });
+  tileCache.set(key, img.complete && img.naturalWidth > 0 ? img : null);
+  return tileCache.get(key);
+}
+
+function renderMap(canvas, state) {
+  if (!state || !state.active) return;
+  const ctx = canvas.getContext('2d');
+
+  // Use CSS pixels for layout (avoids blurring / distortion on HiDPI screens)
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.width / dpr;
+  const H = canvas.height / dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const TILE_SIZE = 256;
+
+  // Current tile position (fractional)
+  const { x: cx, y: cy } = latLonToTileExact(state.lat, state.lon, state.zoom);
+
+  // Pixel offset of the center point on canvas
+  const centerPixX = W / 2 + state.offsetX;
+  const centerPixY = H / 2 + state.offsetY;
+
+  // Which tiles to draw
+  const tilePixX0 = centerPixX - cx * TILE_SIZE;  // pixel x of tile (0,0)
+  const tilePixY0 = centerPixY - cy * TILE_SIZE;
+
+  const xMin = Math.floor(-tilePixX0 / TILE_SIZE) - 1;
+  const xMax = Math.ceil((W - tilePixX0) / TILE_SIZE) + 1;
+  const yMin = Math.floor(-tilePixY0 / TILE_SIZE) - 1;
+  const yMax = Math.ceil((H - tilePixY0) / TILE_SIZE) + 1;
+  const maxTile = Math.pow(2, state.zoom) - 1;
+
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(0, 0, W, H);
+
+  const needed = [];
+  for (let tx = xMin; tx <= xMax; tx++) {
+    for (let ty = yMin; ty <= yMax; ty++) {
+      const tileX = tilePixX0 + tx * TILE_SIZE;
+      const tileY = tilePixY0 + ty * TILE_SIZE;
+      if (tileX + TILE_SIZE < 0 || tileX > W) continue;
+      if (tileY + TILE_SIZE < 0 || tileY > H) continue;
+      if (tx < 0 || ty < 0 || tx > maxTile || ty > maxTile) continue;
+      needed.push({ tx, ty, px: tileX, py: tileY });
+    }
+  }
+
+  // Draw cached tiles immediately, queue missing
+  const toFetch = [];
+  for (const { tx, ty, px, py } of needed) {
+    const key = `${state.zoom}/${tx}/${ty}`;
+    if (tileCache.has(key)) {
+      const img = tileCache.get(key);
+      if (img) ctx.drawImage(img, px, py, TILE_SIZE, TILE_SIZE);
+    } else {
+      toFetch.push({ tx, ty, px, py });
+    }
+  }
+
+  // Draw pin at target location
+  const pinX = centerPixX;
+  const pinY = centerPixY;
+  ctx.font = '22px serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.shadowColor = 'rgba(0,0,0,0.8)';
+  ctx.shadowBlur = 4;
+  ctx.fillText('📍', pinX, pinY + 4);
+  ctx.shadowBlur = 0;
+
+  // Zoom level indicator
+  ctx.font = '11px monospace';
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(4, H-20, 44, 16);
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(`z=${state.zoom}`, 7, H-12);
+
+  // Fetch missing tiles and re-render
+  if (toFetch.length > 0 && state.active) {
+    Promise.all(toFetch.map(({tx,ty}) => getTileImage(state.zoom, tx, ty)))
+      .then(() => { if (state.active) renderMap(canvas, state); });
+  }
+}
+
+function setupMapInteraction(canvas, state) {
+  // Mouse wheel: zoom
+  canvas.onwheel = e => {
+    e.preventDefault();
+    const delta = e.deltaY < 0 ? 1 : -1;
+    const newZoom = Math.max(2, Math.min(18, state.zoom + delta));
+    if (newZoom === state.zoom) return;
+
+    // Keep the cursor position stable while zooming
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const W = canvas.clientWidth;
+    const H = canvas.clientHeight;
+
+    // Current fractional tile of cursor
+    const { x: cx, y: cy } = latLonToTileExact(state.lat, state.lon, state.zoom);
+    const cursorTileX = cx + (mx - W/2 - state.offsetX) / 256;
+    const cursorTileY = cy + (my - H/2 - state.offsetY) / 256;
+
+    // After zoom, same cursor tile should stay at same pixel
+    const zoomFactor = Math.pow(2, newZoom - state.zoom);
+    const newCx = cursorTileX * zoomFactor;
+    const newCy = cursorTileY * zoomFactor;
+    const { x: newCenterX, y: newCenterY } = latLonToTileExact(state.lat, state.lon, newZoom);
+    state.offsetX = mx - W/2 - (newCx - newCenterX) * 256;
+    state.offsetY = my - H/2 - (newCy - newCenterY) * 256;
+    state.zoom = newZoom;
+    renderMap(canvas, state);
+  };
+
+  // Mouse drag: pan
+  let dragStart = null;
+  canvas.onmousedown = e => {
+    dragStart = { mx: e.clientX, my: e.clientY, ox: state.offsetX, oy: state.offsetY };
+  };
+  canvas.onmousemove = e => {
+    if (!dragStart) return;
+    state.offsetX = dragStart.ox + (e.clientX - dragStart.mx);
+    state.offsetY = dragStart.oy + (e.clientY - dragStart.my);
+    renderMap(canvas, state);
+  };
+  canvas.onmouseup = canvas.onmouseleave = () => { dragStart = null; };
+
+  // Double-click: zoom in on click point
+  canvas.ondblclick = e => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const W = canvas.clientWidth;
+    const H = canvas.clientHeight;
+    // Compute lat/lon of clicked point
+    const { x: cx, y: cy } = latLonToTileExact(state.lat, state.lon, state.zoom);
+    const clickTileX = cx + (mx - W/2 - state.offsetX) / 256;
+    const clickTileY = cy + (my - H/2 - state.offsetY) / 256;
+    const { lat: newLat, lon: newLon } = tileToLatLon(clickTileX, clickTileY, state.zoom);
+    state.lat = newLat;
+    state.lon = newLon;
+    state.offsetX = 0;
+    state.offsetY = 0;
+    state.zoom = Math.min(18, state.zoom + 1);
+    renderMap(canvas, state);
+  };
+}
+
+// Coordinate container types — clicking any of these (or their lat/lon children) shows map
+const COORD_CONTAINERS = new Set([
+  'geoCoordinates', 'geographicalCoordinates', 'GeographicalCoordinates',
+  'GsmGeoCoordinates', 'wGS84Coordinates', 'WGS84CoordinateDecimal', 'WGS84CoordinateAngular',
+  'geoInfo', 'geodeticInformation', 'geographicalInformation'
+]);
+
+// Extract lat/lon from a node's children
+function extractLatLon(node) {
+  let latVal = null, lonVal = null;
+  for (const c of node.children) {
+    if ((c.fieldName === 'latitude'  || c.fieldName === 'latitudeSign') && c.displayValue)
+      latVal = (latVal === null ? '' : latVal) + String(c.displayValue);
+    if (c.fieldName === 'latitude'  && c.displayValue) latVal = String(c.displayValue);
+    if (c.fieldName === 'longitude' && c.displayValue) lonVal = String(c.displayValue);
+  }
+  if (!latVal || !lonVal) return null;
+  const lat = parseCoordValue(latVal);
+  const lon = parseCoordValue(lonVal);
+  if (lat === null || lon === null) return null;
+  return { lat, lon, latStr: latVal, lonStr: lonVal };
+}
+
+function findCoordPair(node, allNodes) {
+  const fn = node.fieldName || node.typeName || '';
+
+  // Case 1: clicked directly on a coordinate container (geoCoordinates, geographicalCoordinates…)
+  if (COORD_CONTAINERS.has(fn) && node.children.length >= 2) {
+    const c = extractLatLon(node);
+    if (c) return c;
+  }
+
+  // Case 2: clicked on latitude or longitude leaf — search upward for sibling
+  if (fn === 'latitude' || fn === 'longitude') {
+    // Search entire tree for nearest pair of latitude+longitude siblings
+    let latVal = null, lonVal = null;
+    function findSiblings(ns) {
+      for (const n of ns) {
+        if (n.fieldName === 'latitude'  && n.displayValue) latVal = String(n.displayValue);
+        if (n.fieldName === 'longitude' && n.displayValue) lonVal = String(n.displayValue);
+        findSiblings(n.children);
+      }
+    }
+    findSiblings(allNodes);
+    if (!latVal || !lonVal) return null;
+    const lat = parseCoordValue(latVal);
+    const lon = parseCoordValue(lonVal);
+    if (lat === null || lon === null) return null;
+    return { lat, lon, latStr: latVal, lonStr: lonVal };
+  }
+
+  return null;
+}
+
+function showMapForNode(node) {
+  const coords = findCoordPair(node, currentNodes);
+  if (!coords) {
+    document.getElementById('map-section').classList.add('hidden');
+    disposeMapState();
+    return;
+  }
+  showMap(coords.lat, coords.lon, coords.latStr, coords.lonStr);
+}
+
+function updateMapCanvasSize(canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = Math.max(1, Math.floor(rect.width));
+  const cssH = Math.max(1, Math.floor(rect.height));
+  canvas.style.width  = cssW + 'px';
+  canvas.style.height = cssH + 'px';
+  canvas.width  = Math.max(1, Math.floor(cssW * dpr));
+  canvas.height = Math.max(1, Math.floor(cssH * dpr));
+}
+
+function disposeMapState() {
+  if (!mapState) return;
+  mapState.active = false;
+  if (mapState.resizeObserver) mapState.resizeObserver.disconnect();
+  if (mapState.resizeHandleCleanup) mapState.resizeHandleCleanup();
+  mapState = null;
+}
+
+function setupMapResizeHandle(state) {
+  const handle = document.getElementById('map-resize-handle');
+  const wrap   = document.getElementById('map-canvas-wrap');
+  if (!handle || !wrap) return;
+
+  let dragging = false;
+  let startY = 0;
+  let startH = 0;
+
+  const onMove = e => {
+    if (!dragging) return;
+    const delta = e.clientY - startY;
+    const newH = Math.max(80, startH - delta);
+    wrap.style.height = `${newH}px`;
+  };
+
+  const onUp = () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', onUp);
+  };
+
+  handle.onmousedown = e => {
+    e.preventDefault();
+    dragging = true;
+    startY = e.clientY;
+    startH = wrap.getBoundingClientRect().height;
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  state.resizeHandleCleanup = () => {
+    handle.onmousedown = null;
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', onUp);
+  };
+}
+
+function showMap(lat, lon, latStr, lonStr) {
+  const section = document.getElementById('map-section');
+  const coordDiv = document.getElementById('map-coords');
+  const canvas   = document.getElementById('map-canvas');
+  const openBtn  = document.getElementById('map-open-btn');
+
+  // Format coordinates
+  const latDeg = Math.abs(lat).toFixed(6);
+  const lonDeg = Math.abs(lon).toFixed(6);
+  coordDiv.innerHTML =
+    `<span style="color:var(--text-muted)">Lat:</span> ${latStr}  →  ${lat>=0?'N':'S'}${latDeg}°<br>` +
+    `<span style="color:var(--text-muted)">Lon:</span> ${lonStr}  →  ${lon>=0?'E':'W'}${lonDeg}°`;
+
+  // Deactivate previous map
+  if (mapState) disposeMapState();
+
+  mapState = { lat, lon, zoom: 14, offsetX: 0, offsetY: 0, active: true, resizeObserver: null, resizeHandleCleanup: null };
+  setupMapInteraction(canvas, mapState);
+  setupMapResizeHandle(mapState);
+
+  // Keep canvas size in sync with layout (re-render on resize)
+  const ro = new ResizeObserver(() => {
+    updateMapCanvasSize(canvas);
+    renderMap(canvas, mapState);
+  });
+  ro.observe(canvas);
+  mapState.resizeObserver = ro;
+
+  updateMapCanvasSize(canvas);
+  renderMap(canvas, mapState);
+
+  const osmUrl = () => `https://www.openstreetmap.org/?mlat=${mapState.lat.toFixed(6)}&mlon=${mapState.lon.toFixed(6)}&zoom=${mapState.zoom}`;
+  openBtn.onclick = () => window.berApi.openExternal(osmUrl());
+
+  section.classList.remove('hidden');
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
