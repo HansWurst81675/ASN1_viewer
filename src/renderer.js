@@ -466,6 +466,11 @@ function decodeSmsPdu(rawBytes) {
       return { ...result, errors };
     }
 
+    // SMS-SUBMIT adds a Message Reference (TP-MR) and optional Validity Period (TP-VP)
+    if (mti === 1) {
+      result.messageRef = raw[pos++];
+    }
+
     // SMS-DELIVER / SMS-SUBMIT: address
     const addrLen = raw[pos++];
     const addrTon = raw[pos++];
@@ -482,13 +487,17 @@ function decodeSmsPdu(rawBytes) {
     else if (cg === 0xf) alpha = (dcs >> 2) & 1;
     result.dcs = `0x${dcs.toString(16).padStart(2,'0')} (${['GSM7','8-bit','UCS2','reserved'][alpha]})`;
 
-    // SCTS (SMS-DELIVER only; SMS-SUBMIT has VP instead)
+    // SMS-DELIVER has SCTS, SMS-SUBMIT has TP-VP (validity period)
     if (mti === 0) {
       const s = raw.slice(pos, pos + 7); pos += 7;
       const tz = bcd2(s[6] & ~0x08) * 15;
       result.timestamp = `20${bcd2(s[0]).toString().padStart(2,'0')}-${bcd2(s[1]).toString().padStart(2,'0')}-${bcd2(s[2]).toString().padStart(2,'0')} ` +
         `${bcd2(s[3]).toString().padStart(2,'0')}:${bcd2(s[4]).toString().padStart(2,'0')}:${bcd2(s[5]).toString().padStart(2,'0')} ` +
         `${s[6]&0x08?'-':'+'}${Math.floor(tz/60).toString().padStart(2,'0')}:${(tz%60).toString().padStart(2,'0')}`;
+    } else if (mti === 1) {
+      const vpf = (tp >> 3) & 0x03;
+      if (vpf === 1) pos += 1;             // relative validity period
+      else if (vpf === 2 || vpf === 3) pos += 7; // absolute/enhanced validity period
     }
 
     const udl = raw[pos++];
