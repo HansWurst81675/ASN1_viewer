@@ -790,6 +790,32 @@ ipcMain.handle('get-schema-info', () => ({ typeCount: Object.keys(tagMaps).lengt
 ipcMain.handle('get-recent-files', () => recentFiles);
 ipcMain.handle('clear-recent-files', () => { recentFiles=[]; saveRecent(); rebuildMenu(); });
 
+// OSM tile fetching — done in main process to bypass renderer CSP
+ipcMain.handle('fetch-osm-tile', async (_, z, x, y) => {
+  try {
+    const sub = ['a','b','c'][(x + y) % 3];
+    const url = `https://${sub}.tile.openstreetmap.org/${z}/${x}/${y}.png`;
+    const { net } = require('electron');
+    return await new Promise((resolve, reject) => {
+      const req = net.request({ url, method: 'GET' });
+      // OSM requires a valid User-Agent identifying the application
+      req.setHeader('User-Agent', `BERViewer/${app.getVersion()} (Electron; LI PS-PDU viewer)`);
+      req.setHeader('Referer', 'https://www.openstreetmap.org/');
+      req.on('response', res => {
+        const chunks = [];
+        res.on('data', d => chunks.push(d));
+        res.on('end', () => {
+          if (res.statusCode !== 200) { resolve(null); return; }
+          const buf = Buffer.concat(chunks);
+          resolve('data:image/png;base64,' + buf.toString('base64'));
+        });
+      });
+      req.on('error', () => resolve(null));
+      req.end();
+    });
+  } catch { return null; }
+});
+
 ipcMain.handle('save-file-dialog', async (_, defaultPath) => {
   const result = await dialog.showSaveDialog(mainWindow, {
     title: 'Save BER file as…',
