@@ -783,9 +783,29 @@ function loadFile(filePath) {
   }
 }
 
+function loadFromBuffer(buf, fileName) {
+  try {
+    const typeHint = detectTypeHint(buf);
+    const nodes = parseBer(buf, 0, typeHint, tagMaps);
+    currentFilePath = null; // no path for dragged files
+    // do not add to recent
+    mainWindow.webContents.send('file-loaded', {
+      fileName: fileName,
+      filePath: null,
+      size:     buf.length,
+      nodes:    nodes,
+      typeHint: typeHint,
+    });
+  } catch(e) {
+    console.error('loadFile error:', e);
+    mainWindow.webContents.send('file-error', e.message);
+  }
+}
+
 // ── IPC handlers ──────────────────────────────────────────────────────────────
 ipcMain.handle('open-file-dialog', openFile);
 ipcMain.handle('open-file-path', (_, p) => loadFile(p));
+ipcMain.handle('open-file-buffer', (_, buf, name) => loadFromBuffer(Buffer.from(buf), name));
 ipcMain.handle('get-schema-info', () => ({ typeCount: Object.keys(tagMaps).length, asn1Dir: getAsn1Dir(), version: app.getVersion() }));
 ipcMain.handle('get-recent-files', () => recentFiles);
 ipcMain.handle('clear-recent-files', () => { recentFiles=[]; saveRecent(); rebuildMenu(); });

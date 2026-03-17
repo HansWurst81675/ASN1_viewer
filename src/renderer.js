@@ -190,7 +190,18 @@ document.addEventListener('dragleave', () => dropOverlay.classList.remove('drop-
 document.addEventListener('drop', e => {
   e.preventDefault(); dropOverlay.classList.remove('drop-active');
   const file = e.dataTransfer.files[0];
-  if (file) checkUnsavedAndOpen(() => window.berApi.openFilePath(file.path));
+  if (file) {
+    if (file.path) {
+      checkUnsavedAndOpen(() => window.berApi.openFilePath(file.path));
+    } else {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const buf = reader.result;
+        checkUnsavedAndOpen(() => window.berApi.openFileBuffer(new Uint8Array(buf), file.name));
+      };
+      reader.readAsArrayBuffer(file);
+    }
+  }
 });
 
 // ── Save As ───────────────────────────────────────────────────────────────────
