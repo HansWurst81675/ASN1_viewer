@@ -74,6 +74,8 @@ function findDomainOid(nodes) {
 // ── File loading ──────────────────────────────────────────────────────────────
 window.berApi.onFileLoaded(data => {
   if(!data.nodes||data.nodes.length===0){ statusLeft.textContent=`Error: no nodes`; return; }
+  // Ensure any previous detail/map state is cleared immediately
+  clearDetail();
   currentNodes = data.nodes;
   currentFile  = data.filePath;
   hasChanges   = false;
@@ -817,9 +819,24 @@ function clearDetail() {
   document.getElementById('detail-infobar').textContent='Select a field to inspect';
   document.getElementById('detail-value').textContent='';
   document.getElementById('detail-hex').innerHTML='';
-  document.getElementById('map-section').classList.add('hidden');
-  document.getElementById('map-coords').textContent='';
+  const section = document.getElementById('map-section');
+  const canvas  = document.getElementById('map-canvas');
+  // Hide map section and clear coords
+  if (section) section.classList.add('hidden');
+  if (document.getElementById('map-coords')) document.getElementById('map-coords').textContent='';
+  // Dispose interactive state and remove handlers to avoid stale rendering
   disposeMapState();
+  if (canvas) {
+    try {
+      const ctx = canvas.getContext('2d');
+      ctx && ctx.clearRect(0, 0, canvas.width, canvas.height);
+    } catch (e) {}
+    canvas.onwheel = null; canvas.onmousedown = null; canvas.onmousemove = null;
+    canvas.onmouseup = null; canvas.onmouseleave = null; canvas.ondblclick = null;
+  }
+  // Clear any selected row reference so stale DOM nodes don't trigger detail updates
+  if (selectedRow) selectedRow.classList.remove('selected');
+  selectedRow = null;
 }
 
 // ── Map / Coordinates ─────────────────────────────────────────────────────────
@@ -1059,23 +1076,34 @@ function findCoordPair(node, allNodes) {
     if (c) return c;
   }
 
-  // Case 2: clicked on latitude or longitude leaf — search upward for sibling
+  // Case 2: clicked on latitude or longitude leaf — look for a local sibling pair
+  // Walk up the tree from the clicked node and only consider parents that directly
+  // contain both `latitude` and `longitude` children. This avoids picking up
+  // unrelated coordinate fields elsewhere in the file.
   if (fn === 'latitude' || fn === 'longitude') {
-    // Search entire tree for nearest pair of latitude+longitude siblings
-    let latVal = null, lonVal = null;
-    function findSiblings(ns) {
+    function findParent(ns, target) {
       for (const n of ns) {
-        if (n.fieldName === 'latitude'  && n.displayValue) latVal = String(n.displayValue);
-        if (n.fieldName === 'longitude' && n.displayValue) lonVal = String(n.displayValue);
-        findSiblings(n.children);
+        if (n.children && n.children.includes(target)) return n;
+        const p = findParent(n.children, target);
+        if (p) return p;
       }
+      return null;
     }
-    findSiblings(allNodes);
-    if (!latVal || !lonVal) return null;
-    const lat = parseCoordValue(latVal);
-    const lon = parseCoordValue(lonVal);
-    if (lat === null || lon === null) return null;
-    return { lat, lon, latStr: latVal, lonStr: lonVal };
+
+    let parent = findParent(allNodes, node);
+    while (parent) {
+      const latNode = parent.children.find(c => c.fieldName === 'latitude' && c.displayValue);
+      const lonNode = parent.children.find(c => c.fieldName === 'longitude' && c.displayValue);
+      if (latNode && lonNode) {
+        const latVal = String(latNode.displayValue);
+        const lonVal = String(lonNode.displayValue);
+        const lat = parseCoordValue(latVal);
+        const lon = parseCoordValue(lonVal);
+        if (lat !== null && lon !== null) return { lat, lon, latStr: latVal, lonStr: lonVal };
+      }
+      parent = findParent(allNodes, parent);
+    }
+    return null;
   }
 
   return null;
