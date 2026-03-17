@@ -42,9 +42,15 @@ curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
 
 # System-Abhängigkeiten für Electron
-sudo apt install -y libgconf-2-4 libatk1.0-0 libatk-bridge2.0-0 \
-    libgdk-pixbuf2.0-0 libgtk-3-0 libgbm-dev libnss3 libasound2 \
-    fuse libfuse2
+# Hinweis: Neuere Ubuntu/Mint-Varianten (ab Ubuntu 24 / Mint 22+) verwenden die "t64"-ABI,
+# daher existieren z.B. libgtk-3-0 und libasound2 nicht mehr. Installiere stattdessen:
+sudo apt update
+sudo apt install -y libasound2t64 libgtk-3-0t64 libatk1.0-0t64 libatk-bridge2.0-0t64 libfuse2t64 libgbm-dev libnss3
+
+# Das Paket libgconf-2-4 ist auf neueren Distributionen oft nicht mehr verfügbar.
+# In den meisten Fällen kann es ignoriert werden (moderne Apps benötigen es nicht).
+# Wenn nötig, versuche:
+#   sudo apt install libgconf-2-4t64
 
 # Build
 npm install
@@ -135,6 +141,8 @@ Der Viewer erkennt den Dateityp automatisch anhand der ersten BER-Bytes und der 
 ## SMS-Decoder
 
 Rechtsklick auf ein `content [4]`-Feld in `sMS-Contents` → **📱 SMS dekodieren**.
+
+> ✅ **Fix:** SMS-SUBMIT messages now decode correctly (TP-MR + TP-VP are handled so the text is read from the right offset).
 
 | Typ | Unterstützung |
 |---|---|
