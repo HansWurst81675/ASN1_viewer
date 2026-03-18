@@ -776,6 +776,7 @@ function loadFile(filePath) {
       size:     buf.length,
       nodes:    nodes,
       typeHint: typeHint,
+      hexDump:  hexDump(buf, 0),  // Send pre-computed hex dump instead of buffer
     });
   } catch(e) {
     console.error('loadFile error:', e);

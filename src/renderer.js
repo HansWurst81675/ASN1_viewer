@@ -9,6 +9,7 @@ let searchIdx     = 0;
 let currentNodes  = [];       // top-level parsed nodes (for save/export)
 let currentFile   = null;     // current file path
 let hasChanges    = false;
+let currentHexDump = null;    // hex dump lines for hex viewer
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const dropOverlay  = document.getElementById('drop-overlay');
@@ -20,6 +21,8 @@ const statusRight  = document.getElementById('status-right');
 const searchInput  = document.getElementById('search-input');
 const treePanel    = document.getElementById('tree-panel');
 const resizeHandle = document.getElementById('resize-handle');
+const hexBody      = document.getElementById('hex-body');
+const hexDetailResizeHandle = document.getElementById('hex-detail-resize-handle');
 
 // ── Schema info ───────────────────────────────────────────────────────────────
 window.berApi.getSchemaInfo().then(info => {
@@ -71,6 +74,10 @@ function findDomainOid(nodes) {
   return null;
 }
 
+function countNodes(nodes) {
+  return nodes.reduce((s, n) => s + 1 + countNodes(n.children), 0);
+}
+
 // ── File loading ──────────────────────────────────────────────────────────────
 window.berApi.onFileLoaded(data => {
   if(!data.nodes||data.nodes.length===0){ statusLeft.textContent=`Error: no nodes`; return; }
@@ -78,8 +85,10 @@ window.berApi.onFileLoaded(data => {
   clearDetail();
   currentNodes = data.nodes;
   currentFile  = data.filePath;
+  currentHexDump = data.hexDump;  // Store the hex dump
   hasChanges   = false;
   buildTree(data.nodes);
+  renderHexViewer(data.hexDump);
   fileInfo.textContent = `${data.fileName}  —  ${data.size} bytes`;
   statusLeft.textContent = `${data.fileName}  |  ${data.size} bytes  |  ${countNodes(data.nodes)} fields`;
 
@@ -101,8 +110,59 @@ window.berApi.onFileLoaded(data => {
 
 window.berApi.onFileError(msg => { statusLeft.textContent = `Error: ${msg}`; });
 
-function countNodes(nodes) {
-  return nodes.reduce((s,n) => s+1+countNodes(n.children), 0);
+function renderHexViewer(lines) {
+  hexBody.innerHTML = '';
+  for (const line of lines) {
+    const lineDiv = document.createElement('div');
+    lineDiv.className = 'hex-line';
+    lineDiv.dataset.offset = parseInt(line.offset, 16);
+    lineDiv.innerHTML = `
+      <span class="hex-offset">${line.offset}</span>
+      <span class="hex-bytes">${line.hex}</span>
+      <span class="hex-ascii">${line.ascii}</span>
+    `;
+    lineDiv.onclick = () => onHexClick(parseInt(line.offset, 16));
+    hexBody.appendChild(lineDiv);
+  }
+}
+
+function onHexClick(clickOffset) {
+  const node = findNodeAtOffset(currentNodes, clickOffset);
+  if (node) {
+    const { row } = allNodes.find(x => x.node === node) || {};
+    if (row) {
+      selectRow(row, node);
+      row.scrollIntoView({ block: 'nearest' });
+    }
+  }
+}
+
+function findNodeAtOffset(nodes, offset) {
+  for (const node of nodes) {
+    if (node.offset <= offset && offset < node.offset + node.length) {
+      // Check children first
+      const child = findNodeAtOffset(node.children, offset);
+      if (child) return child;
+      return node;
+    }
+  }
+  return null;
+}
+
+function clearHexHighlight() {
+  document.querySelectorAll('.hex-line.hex-highlight').forEach(el => el.classList.remove('hex-highlight'));
+}
+
+function highlightHexRange(offset, length) {
+  const endOffset = offset + length;
+  const lines = document.querySelectorAll('.hex-line');
+  for (const line of lines) {
+    const lineOffset = parseInt(line.dataset.offset);
+    const lineEnd = lineOffset + 16;
+    if (lineOffset < endOffset && lineEnd > offset) {
+      line.classList.add('hex-highlight');
+    }
+  }
 }
 function updateTitle() {
   document.title = `BER Viewer${hasChanges?' *':''} — ${currentFile ? currentFile.split(/[/\\]/).pop() : ''}`;
@@ -797,6 +857,8 @@ function collapseAll(){ allNodes.forEach(({row,node})=>{ if(node.children.length
 function selectRow(row, node) {
   if(selectedRow) selectedRow.classList.remove('selected');
   selectedRow=row; row.classList.add('selected');
+  clearHexHighlight();
+  highlightHexRange(node.offset, node.length);
   showDetail(node);
 }
 function moveSelection(dir) {
@@ -836,6 +898,7 @@ function showDetail(node) {
   showMapForNode(node);
 }
 function clearDetail() {
+  clearHexHighlight();
   document.getElementById('detail-infobar').textContent='Select a field to inspect';
   document.getElementById('detail-value').textContent='';
   document.getElementById('detail-hex').innerHTML='';
@@ -1280,5 +1343,23 @@ document.addEventListener('mousemove',e=>{
 });
 document.addEventListener('mouseup',()=>{
   if(!resizing)return;resizing=false;resizeHandle.classList.remove('dragging');
+  document.body.style.cursor='';document.body.style.userSelect='';
+});
+
+// ── Hex-detail resizable splitter ─────────────────────────────────────────────
+let hexResizing=false,hexResizeStartY=0,hexResizeStartH=0;
+hexDetailResizeHandle.addEventListener('mousedown',e=>{
+  hexResizing=true;hexResizeStartY=e.clientY;hexResizeStartH=document.getElementById('hex-panel').getBoundingClientRect().height;
+  hexDetailResizeHandle.classList.add('dragging');document.body.style.cursor='row-resize';document.body.style.userSelect='none';
+});
+document.addEventListener('mousemove',e=>{
+  if(!hexResizing)return;
+  const rightPanel = document.getElementById('right-panel');
+  const maxH = rightPanel.getBoundingClientRect().height - 100; // min 100px for detail
+  const newH = Math.max(100, Math.min(maxH, hexResizeStartH + (e.clientY - hexResizeStartY)));
+  document.getElementById('hex-panel').style.height = newH + 'px';
+});
+document.addEventListener('mouseup',()=>{
+  if(!hexResizing)return;hexResizing=false;hexDetailResizeHandle.classList.remove('dragging');
   document.body.style.cursor='';document.body.style.userSelect='';
 });

@@ -59,27 +59,37 @@
     <!-- Resize handle -->
     <div id="resize-handle"></div>
 
-    <!-- Right: detail panel -->
-    <div id="detail-panel">
-      <div id="detail-infobar">Select a field to inspect</div>
+    <!-- Right: hex and detail panels -->
+    <div id="right-panel">
+      <!-- Hex viewer -->
+      <div id="hex-panel">
+        <div id="hex-header">HEX VIEWER</div>
+        <div id="hex-body"></div>
+      </div>
+      <!-- Resize handle for hex/detail -->
+      <div id="hex-detail-resize-handle"></div>
+      <!-- Detail panel -->
+      <div id="detail-panel">
+        <div id="detail-infobar">Select a field to inspect</div>
 
-      <div class="detail-section-label">DECODED VALUE</div>
-      <div id="detail-value"></div>
+        <div class="detail-section-label">DECODED VALUE</div>
+        <div id="detail-value"></div>
 
-      <div class="detail-section-label">HEX DUMP</div>
-      <div id="detail-hex"></div>
+        <div class="detail-section-label">HEX DUMP</div>
+        <div id="detail-hex"></div>
 
-      <div id="map-section" class="hidden">
-        <div class="detail-section-label">KOORDINATEN</div>
-        <div id="map-info">
-          <div id="map-coords"></div>
-          <div id="map-open-btn-wrap">
-            <button id="map-open-btn" class="btn-tool" style="margin-top:6px;font-size:11px">🗺 In OpenStreetMap öffnen</button>
+        <div id="map-section" class="hidden">
+          <div class="detail-section-label">KOORDINATEN</div>
+          <div id="map-info">
+            <div id="map-coords"></div>
+            <div id="map-open-btn-wrap">
+              <button id="map-open-btn" class="btn-tool" style="margin-top:6px;font-size:11px">🗺 In OpenStreetMap öffnen</button>
+            </div>
           </div>
-        </div>
-        <div id="map-resize-handle" title="Drag to resize map"></div>
-        <div id="map-canvas-wrap">
-          <canvas id="map-canvas" width="320" height="260"></canvas>
+          <div id="map-resize-handle" title="Drag to resize map"></div>
+          <div id="map-canvas-wrap">
+            <canvas id="map-canvas" width="320" height="260"></canvas>
+          </div>
         </div>
       </div>
     </div>
