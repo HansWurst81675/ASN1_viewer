@@ -252,7 +252,9 @@ body {
 .hex-offset { color: var(--teal);     min-width: 52px; }
 .hex-bytes  { color: var(--text-dim); min-width: 300px; }
 .hex-byte   { display: inline; }
-.hex-byte.hex-highlight { background: var(--accent); color: #fff; }
+.hex-byte.hex-highlight-tag    { background: #c0392b; color: #fff; }  /* Dark red for Tag */
+.hex-byte.hex-highlight-length { background: #e67e22; color: #fff; }  /* Dark orange for Length */
+.hex-byte.hex-highlight-value  { background: #27ae60; color: #fff; }  /* Dark green for Value */
 .hex-ascii  { color: var(--green); }
 
 /* ── Hex detail resize handle ─────────────────────────────────────────────── */
