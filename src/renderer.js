@@ -129,6 +129,12 @@ function renderHexViewer(lines) {
       byteSpan.className = 'hex-byte';
       byteSpan.dataset.byteIndex = i;
       byteSpan.textContent = hexBytes[i];
+      byteSpan.onclick = (e) => {
+        e.stopPropagation();
+        const lineOffset = parseInt(line.offset, 16);
+        const clickOffset = lineOffset + i;
+        onHexClick(clickOffset);
+      };
       bytesSpan.appendChild(byteSpan);
       if (i < hexBytes.length - 1) {
         bytesSpan.appendChild(document.createTextNode(' '));
@@ -141,7 +147,6 @@ function renderHexViewer(lines) {
     asciiSpan.textContent = line.ascii;
     lineDiv.appendChild(asciiSpan);
 
-    lineDiv.onclick = () => onHexClick(parseInt(line.offset, 16));
     hexBody.appendChild(lineDiv);
   }
 }
@@ -170,21 +175,33 @@ function findNodeAtOffset(nodes, offset) {
 }
 
 function clearHexHighlight() {
-  document.querySelectorAll('.hex-byte.hex-highlight').forEach(el => el.classList.remove('hex-highlight'));
+  document.querySelectorAll('.hex-byte.hex-highlight-tag, .hex-byte.hex-highlight-length, .hex-byte.hex-highlight-value').forEach(el => {
+    el.classList.remove('hex-highlight-tag', 'hex-highlight-length', 'hex-highlight-value');
+  });
 }
 
-function highlightHexRange(offset, length) {
-  const endOffset = offset + length;
+function highlightHexRange(node) {
+  const offset = node.offset;
+  const tagEnd = node.tagEnd;
+  const lengthEnd = node.lengthEnd;
+  const valueEnd = offset + node.length;
+
   const lines = document.querySelectorAll('.hex-line');
   for (const line of lines) {
     const lineOffset = parseInt(line.dataset.offset);
     const lineEnd = lineOffset + 16;
-    if (lineOffset < endOffset && lineEnd > offset) {
+    if (lineOffset < valueEnd && lineEnd > offset) {
       const bytes = line.querySelectorAll('.hex-byte');
       bytes.forEach((byteSpan, index) => {
         const byteOffset = lineOffset + index;
-        if (byteOffset >= offset && byteOffset < endOffset) {
-          byteSpan.classList.add('hex-highlight');
+        if (byteOffset >= offset && byteOffset < valueEnd) {
+          if (byteOffset < tagEnd) {
+            byteSpan.classList.add('hex-highlight-tag');
+          } else if (byteOffset < lengthEnd) {
+            byteSpan.classList.add('hex-highlight-length');
+          } else {
+            byteSpan.classList.add('hex-highlight-value');
+          }
         }
       });
     }
@@ -884,7 +901,7 @@ function selectRow(row, node) {
   if(selectedRow) selectedRow.classList.remove('selected');
   selectedRow=row; row.classList.add('selected');
   clearHexHighlight();
-  highlightHexRange(node.offset, node.length);
+  highlightHexRange(node);
   showDetail(node);
 }
 function moveSelection(dir) {

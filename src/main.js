@@ -531,7 +531,8 @@ function parseBer(buf, baseOffset, typeHint, tagMaps, depth) {
     const valEnd=l.pos+l.len; if(valEnd>buf.length)break;
     const raw=buf.slice(l.pos,valEnd);
     const node={
-      offset:baseOffset+start,cls:t.cls,cons:t.cons,tag:t.tag,length:l.len,
+      offset:baseOffset+start,cls:t.cls,cons:t.cons,tag:t.tag,length:valEnd-start,
+      tagEnd:baseOffset+t.pos, lengthEnd:baseOffset+l.pos,
       valOffset:baseOffset+l.pos,tagLabel:tagLabel(t.cls,t.tag),
       fieldName:null,typeName:null,origChildType:null,displayValue:null,
       hexDump:hexDump(raw,baseOffset+l.pos),children:[],
