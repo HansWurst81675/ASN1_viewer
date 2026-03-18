@@ -116,11 +116,31 @@ function renderHexViewer(lines) {
     const lineDiv = document.createElement('div');
     lineDiv.className = 'hex-line';
     lineDiv.dataset.offset = parseInt(line.offset, 16);
-    lineDiv.innerHTML = `
-      <span class="hex-offset">${line.offset}</span>
-      <span class="hex-bytes">${line.hex}</span>
-      <span class="hex-ascii">${line.ascii}</span>
-    `;
+    const offsetSpan = document.createElement('span');
+    offsetSpan.className = 'hex-offset';
+    offsetSpan.textContent = line.offset;
+    lineDiv.appendChild(offsetSpan);
+
+    const bytesSpan = document.createElement('span');
+    bytesSpan.className = 'hex-bytes';
+    const hexBytes = line.hex.trim().split(' ');
+    for (let i = 0; i < hexBytes.length; i++) {
+      const byteSpan = document.createElement('span');
+      byteSpan.className = 'hex-byte';
+      byteSpan.dataset.byteIndex = i;
+      byteSpan.textContent = hexBytes[i];
+      bytesSpan.appendChild(byteSpan);
+      if (i < hexBytes.length - 1) {
+        bytesSpan.appendChild(document.createTextNode(' '));
+      }
+    }
+    lineDiv.appendChild(bytesSpan);
+
+    const asciiSpan = document.createElement('span');
+    asciiSpan.className = 'hex-ascii';
+    asciiSpan.textContent = line.ascii;
+    lineDiv.appendChild(asciiSpan);
+
     lineDiv.onclick = () => onHexClick(parseInt(line.offset, 16));
     hexBody.appendChild(lineDiv);
   }
@@ -150,7 +170,7 @@ function findNodeAtOffset(nodes, offset) {
 }
 
 function clearHexHighlight() {
-  document.querySelectorAll('.hex-line.hex-highlight').forEach(el => el.classList.remove('hex-highlight'));
+  document.querySelectorAll('.hex-byte.hex-highlight').forEach(el => el.classList.remove('hex-highlight'));
 }
 
 function highlightHexRange(offset, length) {
@@ -160,7 +180,13 @@ function highlightHexRange(offset, length) {
     const lineOffset = parseInt(line.dataset.offset);
     const lineEnd = lineOffset + 16;
     if (lineOffset < endOffset && lineEnd > offset) {
-      line.classList.add('hex-highlight');
+      const bytes = line.querySelectorAll('.hex-byte');
+      bytes.forEach((byteSpan, index) => {
+        const byteOffset = lineOffset + index;
+        if (byteOffset >= offset && byteOffset < endOffset) {
+          byteSpan.classList.add('hex-highlight');
+        }
+      });
     }
   }
 }
