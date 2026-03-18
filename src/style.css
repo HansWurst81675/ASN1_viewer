@@ -251,6 +251,8 @@ body {
 
 .hex-offset { color: var(--teal);     min-width: 52px; }
 .hex-bytes  { color: var(--text-dim); min-width: 300px; }
+.hex-byte   { display: inline; }
+.hex-byte.hex-highlight { background: var(--accent); color: #fff; }
 .hex-ascii  { color: var(--green); }
 
 /* ── Hex detail resize handle ─────────────────────────────────────────────── */
