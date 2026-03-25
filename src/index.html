@@ -26,8 +26,29 @@
     <input id="search-input" type="text" placeholder="Search field / value…" spellcheck="false">
     <button id="btn-search" class="btn-tool" title="Find next (F3)">⌕</button>
   </div>
+  <div class="toolbar-sep"></div>
+  <button id="btn-compare" class="btn-tool" title="Compare two BER files (Ctrl+D)">⇆ Vergleichen</button>
   <div class="toolbar-flex"></div>
   <div id="file-info">No file loaded</div>
+</div>
+
+<!-- ── Compare toolbar (hidden unless compare mode) ──────────────────────── -->
+<div id="compare-toolbar" class="hidden">
+  <div id="compare-file-left" class="compare-file-label">— Datei links —</div>
+  <div class="toolbar-sep"></div>
+  <label class="compare-check-label">
+    <input type="checkbox" id="chk-only-diff" checked> Nur Unterschiede
+  </label>
+  <label class="compare-check-label">
+    <input type="checkbox" id="chk-ignore-ts"> Timestamps ignorieren
+  </label>
+  <label class="compare-check-label">
+    <input type="checkbox" id="chk-ignore-seq"> Sequenz-Nr. ignorieren
+  </label>
+  <div class="toolbar-sep"></div>
+  <button id="btn-compare-close" class="btn-tool">✕ Schließen</button>
+  <div class="toolbar-flex"></div>
+  <div id="compare-file-right" class="compare-file-label">— Datei rechts —</div>
 </div>
 
 <!-- ── Main area ─────────────────────────────────────────────────────────────── -->
@@ -39,6 +60,58 @@
     <div class="drop-title">Drop a BER file here</div>
     <div class="drop-hint">or click <strong>Open</strong> in the toolbar</div>
     <div class="drop-ext">*.hi2  ·  *.ber</div>
+    <div id="drop-two-hint" class="hidden" style="margin-top:12px;font-size:12px;color:var(--teal)">
+      Zwei Dateien droppen → Vergleichsmodus
+    </div>
+  </div>
+
+  <!-- ── Compare view ─────────────────────────────────────────────────────── -->
+  <div id="compare-container" class="hidden">
+
+    <!-- Left side -->
+    <div id="compare-left" class="compare-side">
+      <div class="compare-side-header">
+        <span id="compare-left-name" class="compare-side-name">Datei A</span>
+        <button class="btn-tool compare-open-btn" data-side="left" title="Datei öffnen">⊕ Öffnen</button>
+      </div>
+      <div class="compare-tree-header">
+        <span class="th-col col-name">Feld / Typ</span>
+        <span class="th-col col-value">Wert</span>
+      </div>
+      <div id="compare-left-body" class="compare-body"></div>
+    </div>
+
+    <!-- Centre divider with copy buttons -->
+    <div id="compare-divider">
+      <div id="compare-legend">
+        <span class="legend-item diff-value">● Wert</span>
+        <span class="legend-item diff-struct">● Struktur</span>
+        <span class="legend-item diff-left-only">● Nur Links</span>
+        <span class="legend-item diff-right-only">● Nur Rechts</span>
+      </div>
+      <div id="compare-actions">
+        <button id="btn-copy-lr" class="btn-tool" title="Alle Unterschiede von Links nach Rechts kopieren">L → R</button>
+        <button id="btn-copy-rl" class="btn-tool" title="Alle Unterschiede von Rechts nach Links kopieren">R → L</button>
+        <button id="btn-undo-compare" class="btn-tool" title="Letzten Kopiervorgang rückgängig">↩ Undo</button>
+        <div class="toolbar-sep" style="height:1px;width:100%;margin:4px 0"></div>
+        <button id="btn-save-left"  class="btn-tool">💾 Links</button>
+        <button id="btn-save-right" class="btn-tool">💾 Rechts</button>
+      </div>
+    </div>
+
+    <!-- Right side -->
+    <div id="compare-right" class="compare-side">
+      <div class="compare-side-header">
+        <span id="compare-right-name" class="compare-side-name">Datei B</span>
+        <button class="btn-tool compare-open-btn" data-side="right" title="Datei öffnen">⊕ Öffnen</button>
+      </div>
+      <div class="compare-tree-header">
+        <span class="th-col col-name">Feld / Typ</span>
+        <span class="th-col col-value">Wert</span>
+      </div>
+      <div id="compare-right-body" class="compare-body"></div>
+    </div>
+
   </div>
 
   <!-- Splitter layout -->

@@ -13,6 +13,11 @@ contextBridge.exposeInMainWorld('berApi', {
   openExternal:     (url)          => shell.openExternal(url),
   fetchOsmTile:     (z, x, y)      => ipcRenderer.invoke('fetch-osm-tile', z, x, y),
 
+  // Compare mode
+  openFileDialogCompare: ()            => ipcRenderer.invoke('open-file-dialog-compare'),
+  parseBerFile:          (p)           => ipcRenderer.invoke('parse-ber-file', p),
+  parseBerBuffer:        (buf, name)   => ipcRenderer.invoke('parse-ber-buffer', buf, name),
+
   // Recent files
   getRecentFiles:   ()             => ipcRenderer.invoke('get-recent-files'),
   clearRecentFiles: ()             => ipcRenderer.invoke('clear-recent-files'),

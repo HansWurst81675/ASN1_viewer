@@ -1406,3 +1406,388 @@ document.addEventListener('mouseup',()=>{
   if(!hexResizing)return;hexResizing=false;hexDetailResizeHandle.classList.remove('dragging');
   document.body.style.cursor='';document.body.style.userSelect='';
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Compare Mode ─────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Fields to ignore by default (filter checkboxes)
+const TIMESTAMP_FIELDS = new Set(['timeStamp','microSecondTimeStamp','seconds','microSeconds',
+  'appliedStartTime','appliedEndTime','uELocationTimestamp','generalizedTime','localTime']);
+const SEQNUM_FIELDS    = new Set(['sequenceNumber','communicationIdentityNumber',
+  'ePSCorrelationNumber','communicationIdentifier']);
+
+let cmpLeft  = null;  // { fileName, filePath, nodes }
+let cmpRight = null;
+let cmpDiff  = null;  // computed diff tree
+let cmpUndoStack = []; // [{side, path, oldNodes}]
+let cmpSelectedLeft  = null;
+let cmpSelectedRight = null;
+let cmpMode = false;
+
+// ── Toolbar wiring ────────────────────────────────────────────────────────────
+document.getElementById('btn-compare').addEventListener('click', () => enterCompareMode(null, null));
+
+document.getElementById('btn-compare-close').addEventListener('click', exitCompareMode);
+
+document.getElementById('btn-copy-lr').addEventListener('click', () => cmpCopyAll('lr'));
+document.getElementById('btn-copy-rl').addEventListener('click', () => cmpCopyAll('rl'));
+document.getElementById('btn-undo-compare').addEventListener('click', cmpUndo);
+document.getElementById('btn-save-left').addEventListener('click',  () => cmpSave('left'));
+document.getElementById('btn-save-right').addEventListener('click', () => cmpSave('right'));
+
+document.querySelectorAll('.compare-open-btn').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const side = btn.dataset.side;
+    const result = await window.berApi.openFileDialogCompare();
+    if (result && result.ok) setCmpSide(side, result);
+  });
+});
+
+['chk-only-diff','chk-ignore-ts','chk-ignore-seq'].forEach(id => {
+  document.getElementById(id).addEventListener('change', () => { if (cmpLeft && cmpRight) renderCompare(); });
+});
+
+// ── Keyboard shortcut ─────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.key === 'd') { e.preventDefault(); enterCompareMode(null, null); }
+});
+
+// ── Drag-drop: detect 2 files → compare mode ─────────────────────────────────
+document.addEventListener('drop', async e => {
+  const files = Array.from(e.dataTransfer?.files || []);
+  if (files.length >= 2) {
+    e.preventDefault(); e.stopImmediatePropagation();
+    if (files.length > 2) {
+      alert(`${files.length} Dateien erkannt — es werden die ersten zwei verglichen.`);
+    }
+    const [a, b] = files;
+    const parseFile = async f => {
+      if (f.path) return window.berApi.parseBerFile(f.path);
+      const buf = await f.arrayBuffer();
+      return window.berApi.parseBerBuffer(new Uint8Array(buf), f.name);
+    };
+    const [ra, rb] = await Promise.all([parseFile(a), parseFile(b)]);
+    if (!ra.ok || !rb.ok) { alert('Fehler beim Parsen: ' + (ra.error||rb.error)); return; }
+    enterCompareMode(ra, rb);
+  }
+}, true); // capture phase, before existing drop handler
+
+// ── Enter / exit compare mode ─────────────────────────────────────────────────
+function enterCompareMode(left, right) {
+  cmpMode = true;
+  cmpUndoStack = [];
+  document.getElementById('splitter-container').classList.add('hidden');
+  document.getElementById('compare-container').classList.remove('hidden');
+  document.getElementById('compare-toolbar').classList.remove('hidden');
+  document.getElementById('drop-overlay').classList.add('hidden');
+  document.getElementById('btn-compare').classList.add('btn-primary');
+  if (left)  setCmpSide('left',  left);
+  if (right) setCmpSide('right', right);
+}
+
+function exitCompareMode() {
+  cmpMode = false;
+  document.getElementById('compare-container').classList.add('hidden');
+  document.getElementById('compare-toolbar').classList.add('hidden');
+  document.getElementById('btn-compare').classList.remove('btn-primary');
+  if (currentNodes && currentNodes.length) {
+    document.getElementById('splitter-container').classList.remove('hidden');
+  } else {
+    document.getElementById('drop-overlay').classList.remove('hidden');
+    document.getElementById('drop-overlay').classList.remove('hidden');
+  }
+}
+
+function setCmpSide(side, data) {
+  if (side === 'left') {
+    cmpLeft = data;
+    document.getElementById('compare-left-name').textContent = data.fileName;
+    document.getElementById('compare-file-left').textContent = data.fileName;
+  } else {
+    cmpRight = data;
+    document.getElementById('compare-right-name').textContent = data.fileName;
+    document.getElementById('compare-file-right').textContent = data.fileName;
+  }
+  if (cmpLeft && cmpRight) renderCompare();
+}
+
+// ── TLV-Diff algorithm ────────────────────────────────────────────────────────
+// Returns a diff tree: [{left, right, status, children}]
+// status: 'equal'|'value'|'struct'|'left-only'|'right-only'
+
+function nodeKey(n) {
+  return (n.fieldName || n.typeName || n.tagLabel || '') + ':' + (n.tag ?? '');
+}
+
+function ignoreField(fn) {
+  const onlyDiff = document.getElementById('chk-only-diff').checked;
+  const ignorTs  = document.getElementById('chk-ignore-ts').checked;
+  const ignorSeq = document.getElementById('chk-ignore-seq').checked;
+  if (ignorTs  && TIMESTAMP_FIELDS.has(fn)) return true;
+  if (ignorSeq && SEQNUM_FIELDS.has(fn))    return true;
+  return false;
+}
+
+function diffTrees(leftNodes, rightNodes, depth = 0) {
+  const result = [];
+  const lMap = new Map(), rMap = new Map();
+  const lKeys = [], rKeys = [];
+
+  for (const n of leftNodes)  { const k=nodeKey(n); if(!lMap.has(k)) lMap.set(k,[]); lMap.get(k).push(n); if(!lKeys.includes(k)) lKeys.push(k); }
+  for (const n of rightNodes) { const k=nodeKey(n); if(!rMap.has(k)) rMap.set(k,[]); rMap.get(k).push(n); if(!rKeys.includes(k)) rKeys.push(k); }
+
+  // Merge key ordering (preserve left order, append right-only)
+  const allKeys = [...lKeys];
+  for (const k of rKeys) if (!allKeys.includes(k)) allKeys.push(k);
+
+  for (const key of allKeys) {
+    const ls = lMap.get(key) || [];
+    const rs = rMap.get(key) || [];
+    const count = Math.max(ls.length, rs.length);
+
+    for (let i = 0; i < count; i++) {
+      const l = ls[i] || null;
+      const r = rs[i] || null;
+      const fn = (l||r).fieldName || (l||r).typeName || '';
+
+      if (ignoreField(fn)) continue;
+
+      if (!l) {
+        result.push({ left: null, right: r, status: 'right-only', children: diffTrees([], r.children, depth+1) });
+      } else if (!r) {
+        result.push({ left: l, right: null, status: 'left-only', children: diffTrees(l.children, [], depth+1) });
+      } else {
+        // Both exist — compare
+        const lVal = l.displayValue !== null ? String(l.displayValue) : null;
+        const rVal = r.displayValue !== null ? String(r.displayValue) : null;
+        const lCnt = l.children.length;
+        const rCnt = r.children.length;
+        const childDiff = diffTrees(l.children, r.children, depth+1);
+        const childHasDiff = childDiff.some(c => c.status !== 'equal');
+
+        let status = 'equal';
+        if (lCnt !== rCnt) status = 'struct';
+        else if (lVal !== null && rVal !== null && lVal !== rVal) status = 'value';
+        else if (childHasDiff) status = 'struct';
+
+        result.push({ left: l, right: r, status, children: childDiff });
+      }
+    }
+  }
+  return result;
+}
+
+// ── Render compare trees ──────────────────────────────────────────────────────
+function renderCompare() {
+  cmpDiff = diffTrees(cmpLeft.nodes, cmpRight.nodes);
+  const onlyDiff = document.getElementById('chk-only-diff').checked;
+
+  const lBody = document.getElementById('compare-left-body');
+  const rBody = document.getElementById('compare-right-body');
+  lBody.innerHTML = '';
+  rBody.innerHTML = '';
+
+  // Sync scroll
+  lBody.onscroll = () => { rBody.scrollTop = lBody.scrollTop; };
+  rBody.onscroll = () => { lBody.scrollTop = rBody.scrollTop; };
+
+  let rowIndex = 0;
+  const allRowPairs = [];
+
+  function renderDiffTree(items, depth) {
+    for (const item of items) {
+      if (onlyDiff && item.status === 'equal' && item.children.every(c => hasDiff(c))) continue;
+      if (onlyDiff && item.status === 'equal' && !hasDiff(item)) continue;
+
+      const idx = rowIndex++;
+      const lRow = makeCompareRow(item, 'left',  depth, idx);
+      const rRow = makeCompareRow(item, 'right', depth, idx);
+      lBody.appendChild(lRow);
+      rBody.appendChild(rRow);
+      allRowPairs.push([lRow, rRow, item, depth]);
+
+      if (item.children.length && (item.status !== 'equal' || !onlyDiff || hasDiff(item))) {
+        const lCollapsed = lRow.dataset.collapsed === '1';
+        if (!lCollapsed) renderDiffTree(item.children, depth + 1);
+      }
+    }
+  }
+
+  renderDiffTree(cmpDiff, 0);
+  updateCompareStats();
+}
+
+function hasDiff(item) {
+  if (item.status !== 'equal') return true;
+  return item.children && item.children.some(hasDiff);
+}
+
+function makeCompareRow(item, side, depth, idx) {
+  const node   = side === 'left' ? item.left : item.right;
+  const absent = !node;
+  const row = document.createElement('div');
+  row.className = 'cmp-row diff-' + item.status;
+  row.dataset.idx = idx;
+  row.dataset.collapsed = '0';
+
+  // Indent
+  const ind = document.createElement('span');
+  ind.className = 'cmp-indent';
+  ind.style.width = (depth * 14) + 'px';
+  row.appendChild(ind);
+
+  // Toggle
+  const tog = document.createElement('span');
+  tog.className = 'cmp-toggle';
+  const hasChildren = item.children && item.children.length > 0 && node;
+  tog.textContent = hasChildren ? '▶' : ' ';
+  if (hasChildren) {
+    tog.addEventListener('click', e => {
+      e.stopPropagation();
+      toggleCmpNode(row, item, side, depth, idx);
+    });
+  }
+  row.appendChild(tog);
+
+  // Diff marker
+  const marker = document.createElement('span');
+  marker.className = 'cmp-diff-marker';
+  marker.textContent = { 'equal':'', 'value':'≠', 'struct':'~', 'left-only':side==='left'?'●':' ', 'right-only':side==='right'?'●':' ' }[item.status] || '';
+  row.appendChild(marker);
+
+  // Field name
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'cmp-name';
+  nameSpan.textContent = absent ? '' : (node.fieldName || node.typeName || node.tagLabel || '');
+  if (absent) nameSpan.style.opacity = '0.3';
+  row.appendChild(nameSpan);
+
+  // Value
+  const valSpan = document.createElement('span');
+  valSpan.className = 'cmp-value';
+  if (absent) {
+    valSpan.textContent = '—';
+    valSpan.style.opacity = '0.3';
+  } else if (node.displayValue !== null) {
+    valSpan.textContent = String(node.displayValue).slice(0, 80);
+    // Tooltip with full value
+    if (String(node.displayValue).length > 80) valSpan.title = String(node.displayValue);
+  } else if (node.children.length) {
+    valSpan.textContent = `(${node.children.length} Felder)`;
+    valSpan.style.color = 'var(--text-dim)';
+  }
+  row.appendChild(valSpan);
+
+  // Copy button (value diff rows only)
+  if (item.status === 'value' || item.status === 'struct') {
+    const cpBtn = document.createElement('span');
+    cpBtn.className = 'cmp-copy-btn';
+    cpBtn.title = side === 'left' ? 'Wert von Links nach Rechts kopieren' : 'Wert von Rechts nach Links kopieren';
+    cpBtn.textContent = side === 'left' ? '→' : '←';
+    cpBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      copyCmpValue(item, side === 'left' ? 'lr' : 'rl');
+    });
+    row.appendChild(cpBtn);
+  }
+
+  row.addEventListener('click', () => selectCmpRow(row, item, side));
+  return row;
+}
+
+function toggleCmpNode(row, item, side, depth, idx) {
+  const isCollapsed = row.dataset.collapsed === '1';
+  const tog = row.querySelector('.cmp-toggle');
+  if (isCollapsed) {
+    // Re-render (simple: just call renderCompare again - TODO: incremental)
+    row.dataset.collapsed = '0';
+    tog.textContent = '▶';
+    renderCompare();
+  } else {
+    row.dataset.collapsed = '1';
+    tog.textContent = '▶';
+    renderCompare();
+  }
+}
+
+function selectCmpRow(row, item, side) {
+  document.querySelectorAll('.cmp-row.selected').forEach(r => r.classList.remove('selected'));
+  row.classList.add('selected');
+  // Sync selection on opposite side
+  const idx = row.dataset.idx;
+  document.querySelectorAll(`.cmp-row[data-idx="${idx}"]`).forEach(r => r.classList.add('selected'));
+}
+
+// ── Copy value between sides ──────────────────────────────────────────────────
+function copyCmpValue(item, direction) {
+  // direction: 'lr' = left→right, 'rl' = right→left
+  const srcNode = direction === 'lr' ? item.left  : item.right;
+  const dstNode = direction === 'lr' ? item.right : item.left;
+  if (!srcNode || !dstNode) return;
+
+  // Save undo
+  cmpUndoStack.push({ direction, srcPath: nodePath(srcNode), oldValue: dstNode.displayValue, oldRaw: dstNode.rawValue?.slice() });
+
+  // Copy value
+  dstNode.displayValue = srcNode.displayValue;
+  dstNode.rawValue     = srcNode.rawValue?.slice();
+  dstNode._modified    = true;
+  if (direction === 'lr') cmpRight.nodes = cmpRight.nodes; // trigger re-diff
+  else                    cmpLeft.nodes  = cmpLeft.nodes;
+
+  renderCompare();
+}
+
+function cmpCopyAll(direction) {
+  function copyDiff(items, dir) {
+    for (const item of items) {
+      if (item.status === 'value') copyCmpValue(item, dir);
+      if (item.children) copyDiff(item.children, dir);
+    }
+  }
+  if (!cmpDiff) return;
+  copyDiff(cmpDiff, direction);
+}
+
+function cmpUndo() {
+  const last = cmpUndoStack.pop();
+  if (!last) return;
+  const dstNode = last.direction === 'lr' ? item.right : item.left;
+  if (dstNode) { dstNode.displayValue = last.oldValue; dstNode.rawValue = last.oldRaw; dstNode._modified = false; }
+  renderCompare();
+}
+
+function nodePath(n) { return (n.fieldName || n.typeName || '') + '@' + n.offset; }
+
+// ── Save ──────────────────────────────────────────────────────────────────────
+async function cmpSave(side) {
+  const data = side === 'left' ? cmpLeft : cmpRight;
+  if (!data || !data.nodes) return;
+  const base = data.filePath ? data.filePath.replace(/(\.[^.]+)$/, '_modified$1') : 'modified.hi2';
+  const savePath = await window.berApi.saveFileDialog(base);
+  if (!savePath) return;
+  const bytes = serializeNodes(data.nodes);
+  await window.berApi.saveFile(savePath, Array.from(bytes));
+  alert(`Gespeichert: ${savePath}`);
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+function updateCompareStats() {
+  if (!cmpDiff) return;
+  let nVal=0, nStruct=0, nLeft=0, nRight=0;
+  function count(items) {
+    for (const i of items) {
+      if (i.status==='value')       nVal++;
+      else if (i.status==='struct') nStruct++;
+      else if (i.status==='left-only')  nLeft++;
+      else if (i.status==='right-only') nRight++;
+      if (i.children) count(i.children);
+    }
+  }
+  count(cmpDiff);
+  const total = nVal + nStruct + nLeft + nRight;
+  statusLeft.textContent = total === 0
+    ? '✓ Keine Unterschiede'
+    : `Unterschiede: ${nVal} Wert  ${nStruct} Struktur  ${nLeft} nur links  ${nRight} nur rechts`;
+}
