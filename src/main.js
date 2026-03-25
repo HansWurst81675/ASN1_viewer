@@ -908,6 +908,42 @@ ipcMain.handle('get-schema-info', () => ({ typeCount: Object.keys(tagMaps).lengt
 ipcMain.handle('get-recent-files', () => recentFiles);
 ipcMain.handle('clear-recent-files', () => { recentFiles=[]; saveRecent(); rebuildMenu(); });
 
+// Parse a BER file for compare mode (returns nodes + metadata, no side effects)
+ipcMain.handle('parse-ber-file', async (_, filePath) => {
+  try {
+    const buf = fs.readFileSync(filePath);
+    const typeHint = detectTypeHint(buf);
+    const nodes = parseBer(buf, 0, typeHint, tagMaps);
+    return { ok: true, fileName: path.basename(filePath), filePath, size: buf.length, nodes, typeHint };
+  } catch(e) { return { ok: false, error: e.message }; }
+});
+
+// Parse a BER buffer for compare mode (drag-drop, no path)
+ipcMain.handle('parse-ber-buffer', async (_, bufArray, fileName) => {
+  try {
+    const buf = Buffer.from(bufArray);
+    const typeHint = detectTypeHint(buf);
+    const nodes = parseBer(buf, 0, typeHint, tagMaps);
+    return { ok: true, fileName, filePath: null, size: buf.length, nodes, typeHint };
+  } catch(e) { return { ok: false, error: e.message }; }
+});
+
+// Open file dialog for compare mode (returns result without loading into viewer)
+ipcMain.handle('open-file-dialog-compare', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [{ name: 'BER/HI2 Files', extensions: ['hi2','ber','bin','*'] }]
+  });
+  if (result.canceled || !result.filePaths.length) return null;
+  const fp = result.filePaths[0];
+  try {
+    const buf = fs.readFileSync(fp);
+    const typeHint = detectTypeHint(buf);
+    const nodes = parseBer(buf, 0, typeHint, tagMaps);
+    return { ok: true, fileName: path.basename(fp), filePath: fp, size: buf.length, nodes, typeHint };
+  } catch(e) { return { ok: false, error: e.message }; }
+});
+
 // OSM tile fetching — done in main process to bypass renderer CSP
 ipcMain.handle('fetch-osm-tile', async (_, z, x, y) => {
   try {
