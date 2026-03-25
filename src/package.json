@@ -1,7 +1,7 @@
 {
   "name": "ber-viewer",
-  "version": "1.0.0",
-  "description": "BER Viewer — ETSI LI PS-PDU / 3GPP Lawful Intercept",
+  "version": "1.2.40",
+  "description": "BER Editor  — ETSI LI PS-PDU / 3GPP Lawful Intercept",
   "author": "LI Tools",
   "main": "src/main.js",
   "scripts": {

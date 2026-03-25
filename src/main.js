@@ -247,6 +247,66 @@ function buildTagMaps(asn1Dir) {
     4: ['userLocation',       'UserLocation'],
   };
 
+  // LINotificationType ENUMERATED values (HI4 notification type)
+  maps['LINotificationType'] = { _enum: { 1:'activation', 2:'deactivation', 3:'modification' } };
+
+  // ── HI4 / LI Notification chain (TS 33.128 §5.6) ────────────────────────────
+  // HI4Payload CHOICE: [1]=threeGPP-LI-Notification
+  maps['HI4Payload'] = {
+    1: ['threeGPP-LI-Notification', 'LINotificationPayload'],
+  };
+  // Alias used when IMPLICIT TAGS skip the UNIVERSAL SEQUENCE wrapper
+  maps['hI4PayloadSEQ'] = maps['HI4Payload'];
+
+  // LINotificationPayload SEQUENCE: [1]=OID [2]=notification
+  maps['LINotificationPayload'] = {
+    1: ['lINotificationPayloadOID', 'OBJECT'],
+    2: ['notification',             'LINotificationMessage'],
+  };
+
+  // LINotificationMessage CHOICE: [1]=lINotification
+  maps['LINotificationMessage'] = {
+    1: ['lINotification', 'LINotification'],
+  };
+
+  // LINotification SEQUENCE
+  maps['LINotification'] = {
+    1: ['notificationType',             'LINotificationType'],
+    2: ['appliedTargetID',              'TargetIdentifier'],
+    3: ['appliedDeliveryInformation',   'LIAppliedDeliveryInformationSEQ'],
+    4: ['appliedStartTime',             'GeneralizedTime'],
+    5: ['appliedEndTime',               'GeneralizedTime'],
+  };
+
+  // TargetIdentifier CHOICE (who is being intercepted)
+  maps['TargetIdentifier'] = {
+     1: ['sUPI',                 'OCTET'],
+     2: ['iMSI',                 'OCTET'],
+     3: ['pEI',                  'OCTET'],
+     4: ['iMEI',                 'OCTET'],
+     5: ['gPSI',                 'OCTET'],
+     6: ['mSISDN',               'OCTET'],
+     7: ['nAI',                  'OCTET'],
+     8: ['iPv4Address',          'IPv4Address'],
+     9: ['iPv6Address',          'IPv6Address'],
+    10: ['ethernetAddress',      'OCTET'],
+    11: ['iMPU',                 'OCTET'],
+    12: ['iMPI',                 'OCTET'],
+    13: ['e164Number',           'OCTET'],
+    14: ['emailAddress',         'OCTET'],
+    15: ['mCPTTID',              'UTF8String'],
+    16: ['instanceIdentifierURN','UTF8String'],
+    17: ['pTCChatGroupID',       'OCTET'],
+  };
+
+  // LIAppliedDeliveryInformation SEQUENCE (per delivery destination)
+  maps['LIAppliedDeliveryInformation'] = {
+    1: ['hI2DeliveryIPAddress',   'IPAddress'],
+    2: ['hI2DeliveryPortNumber',  'INTEGER'],
+    3: ['hI3DeliveryIPAddress',   'IPAddress'],
+    4: ['hI3DeliveryPortNumber',  'INTEGER'],
+  };
+
   return maps;
 }
 
@@ -428,6 +488,24 @@ function scalarValue(cls, tag, raw, fieldName, origChildType) {
     }
   }
 
+  // IPv4 address: 4 raw bytes → dotted-decimal notation
+  if (raw.length === 4 && fieldName &&
+      /^i[pP]v?4[Aa]ddress$|^iPBinaryAddress$/.test(fieldName)) {
+    return `${raw[0]}.${raw[1]}.${raw[2]}.${raw[3]}`;
+  }
+  // Also format context-tagged iPv4Address children by origChildType
+  if (raw.length === 4 && origChildType === 'IPv4Address') {
+    return `${raw[0]}.${raw[1]}.${raw[2]}.${raw[3]}`;
+  }
+  // IPv6 address: 16 raw bytes → colon-hex notation
+  if (raw.length === 16 && fieldName &&
+      /^i[pP]v?6[Aa]ddress$|^iPBinaryAddress$/.test(fieldName)) {
+    const groups = [];
+    for (let i = 0; i < 16; i += 2)
+      groups.push(((raw[i] << 8) | raw[i+1]).toString(16).padStart(4,'0'));
+    return groups.join(':');
+  }
+
   // Large binary: hex dump inline
   const s = isPrintable(raw);
   if (s && raw.length <= 64) return s;
@@ -462,6 +540,22 @@ const EXTRA_HINTS = {
   'XIRIPayload,2':              'XIRIEvent',
   // CC payload chain (4G messaging, VoIP)
   'Payload,1':                  'cCPayloadSEQ',
+  // HI4 notification payload chain (TS 33.128 §5.6 / TS 102 232-1 Payload[7])
+  // IMPLICIT TAGS means no inner 0x30 — a7 directly contains a1 (HI4Payload[1])
+  // Both hI4PayloadSEQ and HI4Payload are needed as typeHints
+  'Payload,7':                  'hI4PayloadSEQ',
+  'hI4PayloadSEQ,1':            'LINotificationPayload',   // direct implicit path
+  'HI4Payload,1':               'LINotificationPayload',   // via SEQUENCE OF wrapper
+  'LINotificationPayload,1':    'OBJECT',
+  'LINotificationPayload,2':    'LINotificationMessage',
+  'LINotificationMessage,1':    'LINotification',
+  'LINotification,1':           'LINotificationType',
+  'LINotification,2':           'TargetIdentifier',
+  'LINotification,3':           'LIAppliedDeliveryInformationSEQ',
+  'LINotification,4':           'GeneralizedTime',
+  'LINotification,5':           'GeneralizedTime',
+  'LIAppliedDeliveryInformationSEQ,1': 'IPAddress',
+  'LIAppliedDeliveryInformationSEQ,3': 'IPAddress',
   // UmtsCS chain - files starting with [0..4] context tag
   'UmtsCS-IRIsContent,0':       'UmtsCS-IRIContent',
   'UmtsCS-IRIContent,1':        'UmtsCS-IRI-Parameters',
@@ -567,8 +661,10 @@ function parseBer(buf, baseOffset, typeHint, tagMaps, depth) {
       // UNIVERSAL SEQUENCE — special passthroughs for SEQUENCE OF types
       if     (typeHint==='iRIPayloadSEQ')         recurseHint='LIPSIRIPayload';
       else if(typeHint==='cCPayloadSEQ')           recurseHint='CCPayload';
+      else if(typeHint==='hI4PayloadSEQ')          recurseHint='HI4Payload';
       else if(typeHint==='PartyInformationSEQ')    recurseHint='PartyInformation';
       // SEQUENCE OF types: forward to element type
+      else if(typeHint==='LIAppliedDeliveryInformationSEQ') recurseHint='LIAppliedDeliveryInformation';
       else if(typeHint==='NSSAI')                  recurseHint='SNSSAI';
       else if(typeHint==='fiveGSTAIList')           recurseHint='TAI';
       else if(typeHint==='TAIList')                 recurseHint='TAI';
