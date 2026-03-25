@@ -892,8 +892,13 @@ function setExpanded(row, node, expand) {
   row._arrow.textContent=expand?'▾':'▶';
   row._childContainer.style.display=expand?'block':'none';
 }
-function expandAll()  { allNodes.forEach(({row,node})=>{ if(node.children.length) setExpanded(row,node,true); }); }
-function collapseAll(){ allNodes.forEach(({row,node})=>{ if(node.children.length) setExpanded(row,node,false); });
+function expandAll()  {
+  if (cmpMode) { cmpExpandAll(true);  return; }
+  allNodes.forEach(({row,node})=>{ if(node.children.length) setExpanded(row,node,true); });
+}
+function collapseAll(){
+  if (cmpMode) { cmpExpandAll(false); return; }
+  allNodes.forEach(({row,node})=>{ if(node.children.length) setExpanded(row,node,false); });
   allNodes.filter(({node})=>node._depth===0).forEach(({row,node})=>{ if(node.children.length) setExpanded(row,node,true); }); }
 
 // ── Selection ─────────────────────────────────────────────────────────────────
@@ -1476,26 +1481,62 @@ document.addEventListener('drop', async e => {
 // ── Enter / exit compare mode ─────────────────────────────────────────────────
 function enterCompareMode(left, right) {
   cmpMode = true;
+  cmpLeft  = null;
+  cmpRight = null;
+  cmpDiff  = null;
   cmpUndoStack = [];
+
+  // Reset labels
+  document.getElementById('compare-file-left').textContent  = '— Datei links —';
+  document.getElementById('compare-file-right').textContent = '— Datei rechts —';
+  document.getElementById('compare-left-name').textContent  = 'Datei A';
+  document.getElementById('compare-right-name').textContent = 'Datei B';
+  document.getElementById('compare-left-body').innerHTML  = '';
+  document.getElementById('compare-right-body').innerHTML = '';
+
+  // Switch UI
   document.getElementById('splitter-container').classList.add('hidden');
+  document.getElementById('drop-overlay').classList.add('hidden');
   document.getElementById('compare-container').classList.remove('hidden');
   document.getElementById('compare-toolbar').classList.remove('hidden');
-  document.getElementById('drop-overlay').classList.add('hidden');
   document.getElementById('btn-compare').classList.add('btn-primary');
+
   if (left)  setCmpSide('left',  left);
   if (right) setCmpSide('right', right);
 }
 
 function exitCompareMode() {
   cmpMode = false;
+  cmpLeft  = null;
+  cmpRight = null;
+  cmpDiff  = null;
+  cmpUndoStack = [];
+
+  // Hide compare UI completely
   document.getElementById('compare-container').classList.add('hidden');
   document.getElementById('compare-toolbar').classList.add('hidden');
   document.getElementById('btn-compare').classList.remove('btn-primary');
+
+  // Clear compare data labels
+  document.getElementById('compare-file-left').textContent  = '— Datei links —';
+  document.getElementById('compare-file-right').textContent = '— Datei rechts —';
+  document.getElementById('compare-left-body').innerHTML  = '';
+  document.getElementById('compare-right-body').innerHTML = '';
+
+  // Restore single-view (file info not affected — file-info shows the currently loaded file)
   if (currentNodes && currentNodes.length) {
     document.getElementById('splitter-container').classList.remove('hidden');
+    document.getElementById('drop-overlay').classList.add('hidden');
   } else {
+    document.getElementById('splitter-container').classList.add('hidden');
     document.getElementById('drop-overlay').classList.remove('hidden');
-    document.getElementById('drop-overlay').classList.remove('hidden');
+  }
+  // Restore status bar to single-file info
+  if (currentFile) {
+    const name = currentFile.split(/[/\\]/).pop();
+    statusLeft.textContent = `${name}  |  ${currentNodes ? countNodes(currentNodes) : 0} fields`;
+  } else {
+    statusLeft.textContent = 'Ready';
   }
 }
 
@@ -1579,42 +1620,89 @@ function diffTrees(leftNodes, rightNodes, depth = 0) {
 }
 
 // ── Render compare trees ──────────────────────────────────────────────────────
+const cmpExpandState = new Map(); // key → expanded(bool)
+
+function cmpItemKey(item, depth) {
+  const n = item.left || item.right;
+  return `${depth}:${n ? (n.fieldName||n.typeName||n.tagLabel||'') + '@' + n.offset : '?'}`;
+}
+
+function cmpExpandAll(expand) {
+  // Set all items in cmpDiff to expanded/collapsed
+  function setAll(items, depth) {
+    for (const item of items) {
+      if (item.children && item.children.length) {
+        cmpExpandState.set(cmpItemKey(item, depth), expand);
+        setAll(item.children, depth + 1);
+      }
+    }
+  }
+  if (cmpDiff) { setAll(cmpDiff, 0); renderCompareRows(); }
+}
+
 function renderCompare() {
   cmpDiff = diffTrees(cmpLeft.nodes, cmpRight.nodes);
-  const onlyDiff = document.getElementById('chk-only-diff').checked;
+  cmpExpandState.clear();
+  // Default: expand all items that have diffs, collapse equal subtrees
+  function setDefaults(items, depth) {
+    for (const item of items) {
+      if (item.children && item.children.length) {
+        cmpExpandState.set(cmpItemKey(item, depth), hasDiff(item));
+        setDefaults(item.children, depth + 1);
+      }
+    }
+  }
+  setDefaults(cmpDiff, 0);
+  renderCompareRows();
+}
 
+function renderCompareRows() {
+  const onlyDiff = document.getElementById('chk-only-diff').checked;
   const lBody = document.getElementById('compare-left-body');
   const rBody = document.getElementById('compare-right-body');
+
+  // Save scroll position
+  const savedScroll = lBody.scrollTop;
+
   lBody.innerHTML = '';
   rBody.innerHTML = '';
 
-  // Sync scroll
-  lBody.onscroll = () => { rBody.scrollTop = lBody.scrollTop; };
-  rBody.onscroll = () => { lBody.scrollTop = rBody.scrollTop; };
+  // Sync scroll — only one direction at a time to avoid feedback loop
+  let syncing = false;
+  lBody.onscroll = () => { if (!syncing) { syncing=true; rBody.scrollTop=lBody.scrollTop; syncing=false; } };
+  rBody.onscroll = () => { if (!syncing) { syncing=true; lBody.scrollTop=rBody.scrollTop; syncing=false; } };
 
   let rowIndex = 0;
-  const allRowPairs = [];
 
   function renderDiffTree(items, depth) {
     for (const item of items) {
-      if (onlyDiff && item.status === 'equal' && item.children.every(c => hasDiff(c))) continue;
-      if (onlyDiff && item.status === 'equal' && !hasDiff(item)) continue;
+      // Filter equal items when "only diff" is checked
+      if (onlyDiff && !hasDiff(item)) continue;
 
       const idx = rowIndex++;
       const lRow = makeCompareRow(item, 'left',  depth, idx);
       const rRow = makeCompareRow(item, 'right', depth, idx);
       lBody.appendChild(lRow);
       rBody.appendChild(rRow);
-      allRowPairs.push([lRow, rRow, item, depth]);
 
-      if (item.children.length && (item.status !== 'equal' || !onlyDiff || hasDiff(item))) {
-        const lCollapsed = lRow.dataset.collapsed === '1';
-        if (!lCollapsed) renderDiffTree(item.children, depth + 1);
+      // Recurse into children if expanded
+      if (item.children && item.children.length) {
+        const key = cmpItemKey(item, depth);
+        const expanded = cmpExpandState.get(key) !== false; // default open
+        // Update toggle icon
+        const tog = lRow.querySelector('.cmp-toggle');
+        if (tog) tog.textContent = expanded ? '▼' : '▶';
+        const tog2 = rRow.querySelector('.cmp-toggle');
+        if (tog2) tog2.textContent = expanded ? '▼' : '▶';
+
+        if (expanded) renderDiffTree(item.children, depth + 1);
       }
     }
   }
 
   renderDiffTree(cmpDiff, 0);
+  // Restore scroll
+  requestAnimationFrame(() => { lBody.scrollTop = savedScroll; rBody.scrollTop = savedScroll; });
   updateCompareStats();
 }
 
@@ -1645,7 +1733,7 @@ function makeCompareRow(item, side, depth, idx) {
   if (hasChildren) {
     tog.addEventListener('click', e => {
       e.stopPropagation();
-      toggleCmpNode(row, item, side, depth, idx);
+      toggleCmpNode(row, item, depth);
     });
   }
   row.appendChild(tog);
@@ -1696,19 +1784,11 @@ function makeCompareRow(item, side, depth, idx) {
   return row;
 }
 
-function toggleCmpNode(row, item, side, depth, idx) {
-  const isCollapsed = row.dataset.collapsed === '1';
-  const tog = row.querySelector('.cmp-toggle');
-  if (isCollapsed) {
-    // Re-render (simple: just call renderCompare again - TODO: incremental)
-    row.dataset.collapsed = '0';
-    tog.textContent = '▶';
-    renderCompare();
-  } else {
-    row.dataset.collapsed = '1';
-    tog.textContent = '▶';
-    renderCompare();
-  }
+function toggleCmpNode(row, item, depth) {
+  const key = cmpItemKey(item, depth);
+  const wasExpanded = cmpExpandState.get(key) !== false;
+  cmpExpandState.set(key, !wasExpanded);
+  renderCompareRows();
 }
 
 function selectCmpRow(row, item, side) {
