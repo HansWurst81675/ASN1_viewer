@@ -488,6 +488,24 @@ function scalarValue(cls, tag, raw, fieldName, origChildType) {
     }
   }
 
+  // IPv4 address: 4 raw bytes → dotted-decimal notation
+  if (raw.length === 4 && fieldName &&
+      /^i[pP]v?4[Aa]ddress$|^iPBinaryAddress$/.test(fieldName)) {
+    return `${raw[0]}.${raw[1]}.${raw[2]}.${raw[3]}`;
+  }
+  // Also format context-tagged iPv4Address children by origChildType
+  if (raw.length === 4 && origChildType === 'IPv4Address') {
+    return `${raw[0]}.${raw[1]}.${raw[2]}.${raw[3]}`;
+  }
+  // IPv6 address: 16 raw bytes → colon-hex notation
+  if (raw.length === 16 && fieldName &&
+      /^i[pP]v?6[Aa]ddress$|^iPBinaryAddress$/.test(fieldName)) {
+    const groups = [];
+    for (let i = 0; i < 16; i += 2)
+      groups.push(((raw[i] << 8) | raw[i+1]).toString(16).padStart(4,'0'));
+    return groups.join(':');
+  }
+
   // Large binary: hex dump inline
   const s = isPrintable(raw);
   if (s && raw.length <= 64) return s;
