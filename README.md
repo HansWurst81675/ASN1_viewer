@@ -210,3 +210,35 @@ Beim Start werden alle `*.asn` / `*.asn1`-Dateien aus `asn1_patched/` geladen un
 # Direkt starten ohne Installer
 npm start
 ```
+
+---
+
+## Changelog
+
+### v1.2.40 (2026-03-25)
+- **HI4 Support** — LI_HI4 Notification Payload (ETSI TS 102 232-1 §5.6 / 3GPP TS 33.128) vollständig dekodiert: `threeGPP-LI-Notification` → `LINotification` mit `notificationType`, `appliedTargetID` (MSISDN, IMSI, SUPI …), `appliedDeliveryInformation`, Start-/Endzeit
+- **IP-Adressen** — IPv4 (4 Bytes) und IPv6 (16 Bytes) werden jetzt in lesbarer Form angezeigt (z. B. `80.149.242.97` statt `0x5095f261`)
+- **Interaktive OSM-Karte** — Klick auf `latitude`/`longitude`, `geoCoordinates` oder `geographicalCoordinates` öffnet eine scrollbare und zoombare OpenStreetMap-Karte direkt im Detail-Panel (Mausrad = Zoom, Drag = Pan, Doppelklick = Zoom-in); der Button „🗺 In OpenStreetMap öffnen" zeigt den aktuellen Kartenausschnitt
+- **Koordinatenformate** — GSM-Format (`N510344.38`) und Dezimalgrad (`50.964444`) werden beide erkannt und korrekt in die Karte übertragen
+- **Spec-Anzeige** — Die verwendete ETSI/3GPP-Norm und Version werden aus der eingebetteten Domain-OID ermittelt und in der Statuszeile rechts angezeigt (z. B. `ETSI TS 102 232-1 v3.6 | v1.2.40 | Schema: 542 types`)
+- **SMS-Dekodierung erweitert** — `sMSTPDUData`- und `sMSTPDU`-Felder (TS 33.128) lösen ebenfalls den SMS-Decoder aus
+
+### v1.2.x (2026-02-xx)
+- **Hex-Viewer** — integrierter Hex-Dump mit klickbaren Bytes; Klick auf ein Byte markiert das zugehörige Feld im Baum
+- **Label-Abdeckung auf ≥ 99 %** gesteigert (1 577 Knoten über 31 Testdateien): vollständige Typ-Ketten für MessagingCC, SNSSAI/TAI, HI2CommunicationIdentifier, UmtsHI2PartyIdentity, CCContents, LIAppliedDeliveryInformation, TargetIdentifier
+- **5G Slice/TAI** — `allowedNSSAI`, `fiveGSTAIList`, `TAIList`, `PLMNID` vollständig beschriftet
+- **IPMMIRI** — IPv6-Adressfelder in SIP-Nachrichten korrekt aufgelöst
+- **SMSTPDUData** — Container-Knoten mit einem Kind werden automatisch dekodiert
+- **Statuszeile** — App-Version aus `package.json` live eingeblendet
+- Drag-and-Drop von BER-Dateien direkt ins Fenster
+
+### v1.1.x (2025-12-xx)
+- **Erste stabile Version**
+- BER-Parser mit automatischer Typ-Erkennung (PS-PDU, EPS HI2, UmtsCS HI2, 5G NR)
+- ENUMERATED-Werte als Text (> 210 Typen aus ASN.1-Schemas)
+- MSISDN/IMSI/IMEI BCD-Dekodierung
+- Timestamps in lesbares Datum
+- Rechtsklick-Kontextmenü: Bearbeiten, Kopieren, SMS dekodieren
+- Save As (BER re-serialisiert), Export TXT (Format 1 + 2)
+- Recent Files, ungespeicherte Änderungen werden abgefragt
+- Dark Theme
