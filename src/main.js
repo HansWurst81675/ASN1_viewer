@@ -893,6 +893,7 @@ function loadFromBuffer(buf, fileName) {
       size:     buf.length,
       nodes:    nodes,
       typeHint: typeHint,
+      hexDump:  hexDump(buf, 0),
     });
   } catch(e) {
     console.error('loadFile error:', e);

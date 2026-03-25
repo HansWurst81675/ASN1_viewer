@@ -112,6 +112,7 @@ window.berApi.onFileError(msg => { statusLeft.textContent = `Error: ${msg}`; });
 
 function renderHexViewer(lines) {
   hexBody.innerHTML = '';
+  if (!lines || !Array.isArray(lines)) return;
   for (const line of lines) {
     const lineDiv = document.createElement('div');
     lineDiv.className = 'hex-line';
