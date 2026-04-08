@@ -657,7 +657,13 @@ function parseBer(buf, baseOffset, typeHint, tagMaps, depth) {
         }
       }
       const override=EXTRA_HINTS[`${typeHint},${t.tag}`];
-      if(override){childType=override;node.typeName=override;}
+      if(override){
+        childType=override;
+        node.typeName=override;
+        if(!node.fieldName && !GENERIC_TYPES.has(override)) {
+          node.fieldName = override;
+        }
+      }
     }else if(t.cls===0){
       node.typeName = UNIV[t.tag]||`UNIV-${t.tag}`;
       if ((t.tag === 16 || t.tag === 17) && typeHint && !GENERIC_TYPES.has(typeHint)) {
