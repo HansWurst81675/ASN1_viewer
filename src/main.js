@@ -45,7 +45,7 @@ function buildTagMaps(asn1Dir) {
 
   for (const fname of files) {
     const content = fs.readFileSync(path.join(asn1Dir, fname), 'utf8');
-    const typePattern = /^([A-Z][A-Za-z0-9-]+)\s*::=\s*(?:SEQUENCE|SET|CHOICE)\s*\{/gm;
+    const typePattern = /^([A-Z][A-Za-z0-9-]+)\s*::=\s*(?:SEQUENCE|SET|CHOICE)\b(?:\s|--[^\n]*\n)*\{/gm;
     let m;
     while ((m = typePattern.exec(content)) !== null) {
       const tname = m[1];
