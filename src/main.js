@@ -103,6 +103,35 @@ function buildTagMaps(asn1Dir) {
     19:['threeGPP33128DefinedIRI','XIRIPayload'], 20:['iPIRIPacketReport','IPIRIPacketReport'],
   };
 
+  // UMTS IRI wrapper types: untagged CHOICE / SEQUENCE OF wrappers that cannot be
+  // inferred from ASN.1 comments alone.
+  maps['UmtsIRIsContent'] = {
+    1:['umtsiRIContent','UmtsIRIContent'],
+    2:['umtsiRIContent','UmtsIRIContent'],
+    3:['umtsiRIContent','UmtsIRIContent'],
+    4:['umtsiRIContent','UmtsIRIContent'],
+   16:['umtsIRISequence','UmtsIRISequence'],
+  };
+  maps['UmtsIRISequence'] = {
+    1:['umtsiRIContent','UmtsIRIContent'],
+    2:['umtsiRIContent','UmtsIRIContent'],
+    3:['umtsiRIContent','UmtsIRIContent'],
+    4:['umtsiRIContent','UmtsIRIContent'],
+  };
+  maps['UmtsCS-IRIsContent'] = {
+    1:['iRIContent','UmtsCS-IRIContent'],
+    2:['iRIContent','UmtsCS-IRIContent'],
+    3:['iRIContent','UmtsCS-IRIContent'],
+    4:['iRIContent','UmtsCS-IRIContent'],
+   16:['iRISequence','UmtsCS-IRISequence'],
+  };
+  maps['UmtsCS-IRISequence'] = {
+    1:['iRIContent','UmtsCS-IRIContent'],
+    2:['iRIContent','UmtsCS-IRIContent'],
+    3:['iRIContent','UmtsCS-IRIContent'],
+    4:['iRIContent','UmtsCS-IRIContent'],
+  };
+
   // Virtual types for inline SEQUENCE bodies that share a common tag number
   // across multiple ASN.1 versions (EPS, UMTS, HI2)
   maps['EpsPartyIdentity'] = {
@@ -588,6 +617,8 @@ const EXTRA_HINTS = {
   // Other IRIContents CHOICE members
   'UMTSIRI,0':                  'UmtsIRI-Parameters',
   'UMTSIRI,1':                  'UmtsIRIsContent',
+  'UMTSIRI,2':                  'UmtsCS-IRI-Parameters',
+  'UMTSIRI,3':                  'UmtsCS-IRIsContent',
   // CCPayload content chain
   'CCPayload,2':                'CCContents',
   'CCContents,14':              'MessagingCC',
