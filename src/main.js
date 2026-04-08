@@ -663,6 +663,9 @@ function parseBer(buf, baseOffset, typeHint, tagMaps, depth) {
       if ((t.tag === 16 || t.tag === 17) && typeHint && !GENERIC_TYPES.has(typeHint)) {
         node.typeName = typeHint;
       }
+      if (!node.fieldName && node.typeName && !GENERIC_TYPES.has(node.typeName) && (t.tag === 16 || t.tag === 17)) {
+        node.fieldName = node.typeName;
+      }
     }
 
     let recurseHint=childType;
