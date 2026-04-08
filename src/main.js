@@ -660,6 +660,7 @@ function parseBer(buf, baseOffset, typeHint, tagMaps, depth) {
       if(override){
         childType=override;
         node.typeName=override;
+        node.origChildType=override;
         if(!node.fieldName && !GENERIC_TYPES.has(override)) {
           node.fieldName = override;
         }
