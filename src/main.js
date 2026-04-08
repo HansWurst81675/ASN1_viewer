@@ -658,7 +658,12 @@ function parseBer(buf, baseOffset, typeHint, tagMaps, depth) {
       }
       const override=EXTRA_HINTS[`${typeHint},${t.tag}`];
       if(override){childType=override;node.typeName=override;}
-    }else if(t.cls===0){node.typeName=UNIV[t.tag]||`UNIV-${t.tag}`;}
+    }else if(t.cls===0){
+      node.typeName = UNIV[t.tag]||`UNIV-${t.tag}`;
+      if ((t.tag === 16 || t.tag === 17) && typeHint && !GENERIC_TYPES.has(typeHint)) {
+        node.typeName = typeHint;
+      }
+    }
 
     let recurseHint=childType;
     if(t.cls===0&&t.tag===16){
