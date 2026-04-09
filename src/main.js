@@ -203,6 +203,23 @@ function buildTagMaps(asn1Dir) {
     7: ['content-transfer-encoding',    'OCTET'],
   };
 
+  // CCPayload in LI-PS-PDU (ETSI) has [0]=payloadDirection, [1]=timeStamp, [2]=cCContents
+  // CCPayload in TS33128 (5G) has [1]=cCPayloadOID, [2]=pDU (CCPDU)
+  // TS33128 version is parsed last and overwrites LI-PS-PDU version.
+  // Restore LI-PS-PDU CCPayload (used by cCPayloadSEQ path from ETSI wrapper):
+  maps['CCPayload'] = {
+    0: ['payloadDirection',     'PayloadDirection'],
+    1: ['timeStamp',            'GeneralizedTime'],
+    2: ['cCContents',           'CCContents'],
+    3: ['microSecondTimeStamp', 'MicroSecondTimeStamp'],
+    4: ['timeStampQualifier',   'TimeStampQualifier'],
+  };
+  // TS33128 CCPayload as separate alias (used when OID identifies 5G CC payload)
+  maps['TS33128CCPayload'] = {
+    1: ['cCPayloadOID', 'OBJECT'],
+    2: ['pDU',          'CCPDU'],
+  };
+
   // CCContents CHOICE — includes payloadDirection [0] from LI-PS-PDU hybrid
   maps['CCContents'] = {
      0: ['payloadDirection',    'ENUMERATED'],
@@ -215,7 +232,7 @@ function buildTagMaps(asn1Dir) {
     15: ['ePSCC',                'OCTET'],
     16: ['uMTSCC-CC-PDU',        'OCTET'],
     17: ['ePSCC-CC-PDU',         'OCTET'],
-    23: ['threeGPP33128DefinedCC','OCTET'],
+    23: ['threeGPP33128DefinedCC','TS33128CCPayload'],  // TS33128 5G CC payload
   };
 
   // HI2Operations CommunicationIdentifier (different from LI-PS-PDU!)
@@ -647,6 +664,15 @@ const EXTRA_HINTS = {
   'UMTSIRI,1':                  'UmtsIRIsContent',
   // CCPayload content chain
   'CCPayload,2':                'CCContents',
+  'CCPayload,0':                'PayloadDirection',
+  // TS33128 5G CC payload chain
+  'CCContents,23':              'TS33128CCPayload',
+  'TS33128CCPayload,2':         'CCPDU',
+  'CCPDU,1':                    'UPFCCPDU',
+  'CCPDU,2':                    'ExtendedUPFCCPDU',
+  'CCPDU,3':                    'MMSCCPDU',
+  'CCPDU,6':                    'IMSCCPDU',
+  'ExtendedUPFCCPDU,1':         'UPFCCPDUPayload',
   'CCContents,14':              'MessagingCC',
   // 5G TAI pLMNID -> PLMNID type (enables mCC/mNC labels)
   'TAI,1':                      'PLMNID',
