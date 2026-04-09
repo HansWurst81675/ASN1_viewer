@@ -1,7 +1,7 @@
 {
   "name": "ber-viewer",
-  "version": "1.2.40",
-  "description": "BER Editor  — ETSI LI PS-PDU / 3GPP Lawful Intercept",
+  "version": "1.3.0",
+  "description": "BER Editor  \u2014 ETSI LI PS-PDU / 3GPP Lawful Intercept",
   "author": "LI Tools",
   "main": "src/main.js",
   "scripts": {
@@ -23,7 +23,12 @@
     ],
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "assets/icon.ico",
       "signingHashAlgorithms": null,

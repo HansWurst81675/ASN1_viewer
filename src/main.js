@@ -224,6 +224,33 @@ function buildTagMaps(asn1Dir) {
     1: ['network-Identifier',            'Network-Identifier'],
   };
 
+  // HI2IPAddress = HI2Operations IPAddress ::= SEQUENCE { iP-type[1], iP-value[2], ... }
+  // Needed because TS33128Payloads_r17 overwrites tagMaps['IPAddress'] with its CHOICE version.
+  // All HI2/EPS/UMTS code paths that carry a binary IP are routed here via EXTRA_HINTS.
+  maps['HI2IPAddress'] = {
+    1: ['iP-type',          'ENUMERATED'],
+    2: ['iP-value',         'IP-value'],   // IP-value CHOICE: iPBinaryAddress[1] / iPTextAddress[2]
+    3: ['iP-assignment',    'ENUMERATED'],
+    4: ['iPv6PrefixLength', 'INTEGER'],
+    5: ['iPv4SubnetMask',   'OCTET'],
+  };
+
+  // UMTSIRI CHOICE (LI-PS-PDU.asn) — the typePattern regex misses it because
+  // a comment sits between "CHOICE" and "{" on separate lines.
+  maps['UMTSIRI'] = {
+    0: ['iRI-Parameters',     'UmtsIRI-Parameters'],
+    1: ['umtsIRIsContent',    'UmtsIRIsContent'],
+    2: ['iRI-CS-Parameters',  'UmtsCS-IRI-Parameters'],
+    3: ['umtsCS-IRIsContent', 'UmtsCS-IRIsContent'],
+  };
+
+  // UmtsCS-IRI-Parameters: iRIversion[23] is inside an inline ENUMERATED block,
+  // so the field-regex skips it (d>0 at the open brace). Patch manually.
+  // hi2CSDomainId[0] is also patched here to be sure.
+  const umtsCsMap = maps['UmtsCS-IRI-Parameters'] || {};
+  umtsCsMap[23] = ['iRIversion', 'ENUMERATED'];
+  maps['UmtsCS-IRI-Parameters'] = umtsCsMap;
+
   // UmtsCS partyIdentity (HI2Operations variant with [3]=imsi, [4]=callingPartyNumber)
   maps['UmtsHI2PartyIdentity'] = {
     1: ['imei',                'OCTET'],
@@ -562,6 +589,15 @@ const EXTRA_HINTS = {
   'LIAppliedDeliveryInformationSEQ,3': 'IPAddress',
   // UmtsCS chain - files starting with [0..4] context tag
   'UmtsCS-IRIsContent,0':       'UmtsCS-IRIContent',
+  'UmtsCS-IRIsContent,1':       'UmtsCS-IRIContent',
+  'UmtsCS-IRIsContent,2':       'UmtsCS-IRIContent',
+  'UmtsCS-IRIsContent,3':       'UmtsCS-IRIContent',
+  'UmtsCS-IRIsContent,4':       'UmtsCS-IRIContent',
+  // UmtsIRIsContent is also an untagged CHOICE — forward all branch tags to UmtsIRIContent
+  'UmtsIRIsContent,1':          'UmtsIRIContent',
+  'UmtsIRIsContent,2':          'UmtsIRIContent',
+  'UmtsIRIsContent,3':          'UmtsIRIContent',
+  'UmtsIRIsContent,4':          'UmtsIRIContent',
   'UmtsCS-IRIContent,1':        'UmtsCS-IRI-Parameters',
   'UmtsCS-IRIContent,2':        'UmtsCS-IRI-Parameters',
   'UmtsCS-IRIContent,3':        'UmtsCS-IRI-Parameters',
@@ -602,10 +638,27 @@ const EXTRA_HINTS = {
   'UmtsCS-IRI-Parameters,2':    'HI2CommunicationIdentifier',
   // HI2CommunicationIdentifier[1] = Network-Identifier (same as Network-Identifier in maps)
   'HI2CommunicationIdentifier,1': 'Network-Identifier',
-  // IP address inner encoding (LI-PS-PDU IP-value)
+  // UMTSIRI CHOICE (LI-PS-PDU §): [3]=umtsCS-IRIsContent wraps UmtsCS IRI records
+  'UMTSIRI,3':                  'UmtsCS-IRIsContent',
+  // IP address inner encoding (LI-PS-PDU IP-value / TS33128 IPv4/IPv6 Address CHOICE)
   'IPv6Address,1':              'iPBinaryAddress',
   'IPv6Address,2':              'iPBinaryAddress',
   'IPv4Address,1':              'iPBinaryAddress',
+  // HI2IPAddress = HI2Operations IPAddress SEQUENCE (iP-type[1], iP-value[2])
+  // Distinct from TS33128 IPAddress CHOICE which overwrites tagMaps['IPAddress'].
+  // All HI2/EPS/UMTS parents that reference HI2 IPAddress are routed here via EXTRA_HINTS.
+  'HI2IPAddress,2':             'IP-value',   // iP-value[2] -> IP-value CHOICE
+  // Parents that carry a HI2 IPAddress field (Network-Element-Identifier, DataNodeAddress, etc.)
+  'Network-Element-Identifier,5': 'HI2IPAddress',  // iP-Address[5]
+  'DataNodeAddress,1':            'HI2IPAddress',  // ipAddress[1]
+  'PacketDataHeaderMapped,1':     'HI2IPAddress',  // sourceIPAddress[1]
+  'PacketDataHeaderMapped,3':     'HI2IPAddress',  // destinationIPAddress[3]
+  'PacketFlowSummary,1':          'HI2IPAddress',  // sourceIPAddress[1]
+  'PacketFlowSummary,3':          'HI2IPAddress',  // destinationIPAddress[3]
+  'EpsIRI-Parameters,53':         'HI2IPAddress',  // heNBiPAddress[53]
+  // DeliveryInformation hi2/hi3DeliveryIpAddress use HI2 IPAddress SEQUENCE, not TS33128 CHOICE
+  'DeliveryInformation,2':        'HI2IPAddress',  // hi2DeliveryIpAddress[2]
+  'DeliveryInformation,3':        'HI2IPAddress',  // hi3DeliveryIpAddress[3]
   // EPS-GTPV2-SpecificParameters[23] = ePSlocationOfTheTarget :: EPSLocation
   'EPS-GTPV2-SpecificParameters,23': 'EPSLocation',
   // IPMMIRI SIPMessage chain (4G uses [0][1][2], TS33128 5G uses [1][2][3])
