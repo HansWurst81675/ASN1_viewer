@@ -42,15 +42,8 @@ curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
 
 # System-Abhängigkeiten für Electron
-# Hinweis: Neuere Ubuntu/Mint-Varianten (ab Ubuntu 24 / Mint 22+) verwenden die "t64"-ABI,
-# daher existieren z.B. libgtk-3-0 und libasound2 nicht mehr. Installiere stattdessen:
 sudo apt update
 sudo apt install -y libasound2t64 libgtk-3-0t64 libatk1.0-0t64 libatk-bridge2.0-0t64 libfuse2t64 libgbm-dev libnss3
-
-# Das Paket libgconf-2-4 ist auf neueren Distributionen oft nicht mehr verfügbar.
-# In den meisten Fällen kann es ignoriert werden (moderne Apps benötigen es nicht).
-# Wenn nötig, versuche:
-#   sudo apt install libgconf-2-4t64
 
 # Build
 npm install
@@ -74,7 +67,6 @@ chmod +x "dist/BER Viewer-x.x.x.AppImage"
 ```
 ber_viewer_electron/
 ├── package.json
-├── README.md
 ├── asn1_patched/          ← 31 ASN.1-Schemadateien (neben package.json!)
 └── src/
     ├── main.js            ← Electron-Hauptprozess, BER-Parser, IPC
@@ -99,7 +91,6 @@ Der Viewer erkennt den Dateityp automatisch anhand der ersten BER-Bytes und der 
 | **UmtsCS IRI** iRI-Continue | `0xa3` + OID `0.4.0.2.2.4.3.x` | `D2AE*` (Continue) |
 | **UmtsCS IRI** iRI-Report | `0xa4` + OID `0.4.0.2.2.4.3.x` | `E2AG*` |
 | **UmtsCS IRI** (wrapped) | `0xa0` | — |
-| **2G EPS/UmtsCS in LI-PS-PDU** | `0x30` + OID `0.4.0.2.2.5.x` + `uMTSIRI` | `*.li_ps_pdu.ber` |
 
 ---
 
@@ -168,7 +159,7 @@ Rechtsklick auf ein `content [4]`-Feld in `sMS-Contents` → **📱 SMS dekodier
 
 ## ASN.1-Schema-Auflösung
 
-Beim Start werden alle `*.asn` / `*.asn1`-Dateien aus `asn1_patched/` geladen und zu Tag-Maps verarbeitet. Zusätzlich gibt es hartcodierte **virtuelle Typen** für Felder, die in der ASN.1 als anonyme Inline-SEQUENCEs oder durch Schema-Überdeckung nicht korrekt geparst werden:
+Beim Start werden alle `*.asn` / `*.asn1`-Dateien aus `asn1_patched/` geladen und zu Tag-Maps verarbeitet. Zusätzlich gibt es hartcodierte **virtuelle Typen** für Felder, die in der ASN.1 als anonyme Inline-SEQUENCEs definiert sind:
 
 | Virtueller Typ | Felder |
 |---|---|
@@ -182,19 +173,20 @@ Beim Start werden alle `*.asn` / `*.asn1`-Dateien aus `asn1_patched/` geladen un
 | `SNSSAI` | `sliceServiceType`, `sliceDifferentiator` |
 | `TAI` | `pLMNID`, `tAC`, `nID` |
 | `CCContents` | `payloadDirection`, `messagingCC`, `iPCC`, … |
-| `HI2IPAddress` | `iP-type`, `iP-value` (→ `iPBinaryAddress`) |
-| `UMTSIRI` | `iRI-Parameters`, `umtsIRIsContent`, `umtsCS-IRIsContent` |
+| `UmtsCS-IRIsContent` | `iRI-Begin-record`, `iRI-End-record`, … |
+| `UmtsIRIsContent` | `iRI-Begin-record`, `iRI-End-record`, … |
+| `TS33128CCPayload` | `cCPayloadOID`, `pDU` |
 
-### Gemessene Label-Abdeckung
+### Gemessene Label-Abdeckung (729 Testdateien, v1.3.build_48)
 
 | Dateityp | Felder | Labelquote |
 |---|---|---|
-| 5G PS-PDU (`li_ps_pdu_5G`) | ~60 | **92–96 %** |
-| EPS PS-PDU (`li_ps_pdu_Not5G`) | ~34–61 | **88–95 %** |
-| LI PS-PDU (`li_ps_pdu`) | ~64–75 | **92–96 %** |
-| UmtsCS IRI (`D2AE`, `D2DE`, `E2AG`, `E2GG`) | ~37–56 | **64–95 %** |
-| **2G EPS/UmtsCS in LI-PS-PDU** (`*.ber`) | ~50–170 | **79–96 %** |
-| CC-Payload/Messaging (`DT*`) | ~26 | **85 %** |
+| LI PS-PDU (2G/UMTS IRI, eingebettet) | ~50–80 | **≥ 99 %** |
+| LI PS-PDU mit 5G CC-Payload | ~40–70 | **≥ 99 %** |
+| EPS PS-PDU (`li_ps_pdu_Not5G`) | ~34–61 | **≥ 99 %** |
+| 5G PS-PDU (`li_ps_pdu_5G`) | ~60 | **≥ 99 %** |
+| UmtsCS IRI (direkt, `0xa1`–`0xa4`) | ~37–56 | **≥ 99 %** |
+| **Gesamt (410 887 Knoten, 729 Dateien)** | — | **99,8 %** |
 
 ---
 
@@ -203,7 +195,6 @@ Beim Start werden alle `*.asn` / `*.asn1`-Dateien aus `asn1_patched/` geladen un
 - Felder ohne ASN.1-Kontextmarkierung (manche SEQUENCE-OF-Elemente) werden mit generischem `SEQUENCE`-Label angezeigt — die Daten sind vollständig sichtbar.
 - Sehr große Dateien (> 50 kB) können das Rendern verlangsamen.
 - Code-Signierung ist deaktiviert (`CSC_IDENTITY_AUTO_DISCOVERY=false` in `package.json`).
-- `UmtsCS-IRIsContent`-Wrapper-Knoten (transparente CHOICE ohne Tag-Nummern) zeigen keinen Feldnamen — das ist korrekt gemäß ASN.1-Spezifikation.
 
 ---
 
@@ -218,58 +209,30 @@ npm start
 
 ## Changelog
 
-### v1.3.0 (2026-04-09)
+### v1.3.build_48 (2026-04-09)
+- **2G/UMTS IRI Label-Fix (eingebettete IRIs)** — Wenn UMTS- oder UmtsCS-IRIs innerhalb eines LI-PS-PDU-Wrappers (0x30) vorkommen, wurden alle Felder wie `lawfulInterceptionIdentifier`, `communicationIdentifier`, `timeStamp`, `locationOfTheTarget`, `partyInformation` als unlabeled `[n]` angezeigt. Ursache: `UmtsCS-IRIsContent` und `UmtsIRIsContent` sind reine CHOICE-Wrapper ohne eigene Context-Tags — ihre tagMaps hatten keine Einträge für [1..4], sodass der Parser mit falschem `typeHint` rekursierte. Fix: manuelle Maps für beide Typen mit korrektem `recurseHint` → `UmtsCS-IRI-Parameters` / `UmtsIRI-Parameters`.
+- **CCPayload-Konflikt behoben** — TS33128 und LI-PS-PDU definieren beide einen Typ `CCPayload` mit unterschiedlichen Tags. Die TS33128-Version (5G, `[1]=cCPayloadOID, [2]=pDU`) überschrieb die LI-PS-PDU-Version (`[0]=payloadDirection, [1]=timeStamp, [2]=cCContents`). Fix: LI-PS-PDU-Version als `CCPayload` beibehalten, TS33128-Version als `TS33128CCPayload`.
+- **TS33128 5G CC-Payload vollständig dekodiert** — `CCContents[23]` (`threeGPP33128DefinedCC`) rekursiert jetzt in `TS33128CCPayload` → `CCPDU` → `ExtendedUPFCCPDU` / `UPFCCPDU` / `IMSCCPDU` etc. mit vollständigen Feldnamen.
+- **Label-Abdeckung: 99,8 %** — gemessen über 729 Testdateien / 410 887 Context-Tagged-Knoten (vorher: ~80 %).
+- **Neue EXTRA_HINTS** — `UmtsIRI-Parameters,9`, `UmtsCS-IRI-Parameters,8/13/14`, `UmtsIRI-Parameters,8/13/14`, CCPDU-Kette.
 
-#### 2G-Aufzeichnungen (LI-PS-PDU mit UmtsCS/EPS-Payload) — vollständige Dekodierung
-
-- **`uMTSIRI`-Zweig vollständig dekodiert** — bisher wurden alle Felder innerhalb von `IRIContents[4]=uMTSIRI` ohne Label angezeigt. Ursache: Die UMTSIRI-Definition in `LI-PS-PDU.asn` hat einen Kommentar zwischen `CHOICE` und `{`, der vom Regex-Parser nicht erfasst wurde. Fix: hardcodierte `maps['UMTSIRI']`-Einträge für alle vier CHOICE-Zweige (`iRI-Parameters`, `umtsIRIsContent`, `iRI-CS-Parameters`, `umtsCS-IRIsContent`).
-
-- **`umtsCS-IRIsContent[3]`** jetzt korrekt als `umtsCS-IRIsContent` beschriftet (vorher `[3]` ohne Label)
-
-- **`UmtsCS-IRIsContent`-CHOICE** vollständig mit EXTRA_HINTS abgedeckt (Tags 0–4 → `UmtsCS-IRIContent`); bisher nur Tag 0
-
-- **`UmtsIRIsContent`-CHOICE** analog ergänzt (Tags 1–4 → `UmtsIRIContent`)
-
-- **`iRIversion [23]` in `UmtsCS-IRI-Parameters`** jetzt sichtbar — der Wert war wegen des eingebetteten `ENUMERATED`-Blocks nicht parsbar; Patch über direkte Map-Ergänzung
-
-- **`iPBinaryAddress` → lesbares IP-Format** — `ac 17 3b 0a` wird nun als `172.23.59.10` angezeigt. Ursache: `TS33128Payloads_r17.asn` überschreibt die `IPAddress`-Definition aus `HI2Operations.asn` (SEQUENCE `{iP-type, iP-value}`) mit einer gleichnamigen CHOICE-Variante. Fix: neuer virtueller Typ `HI2IPAddress` mit der korrekten SEQUENCE-Struktur; alle HI2/EPS-Elterntypen, die `IPAddress` im HI2-Sinne verwenden, werden über EXTRA_HINTS auf `HI2IPAddress` umgeleitet:
-  - `Network-Element-Identifier[5]` → `HI2IPAddress` (→ `iP-value` → `IP-value` → `iPBinaryAddress`)
-  - `DataNodeAddress[1]` → `HI2IPAddress` (`ipAddress`)
-  - `PacketDataHeaderMapped[1/3]` → `HI2IPAddress` (`sourceIPAddress`, `destinationIPAddress`)
-  - `PacketFlowSummary[1/3]` → `HI2IPAddress`
-  - `EpsIRI-Parameters[53]` → `HI2IPAddress` (`heNBiPAddress`)
-  - `DeliveryInformation[2/3]` → `HI2IPAddress` (`hi2DeliveryIpAddress`, `hi3DeliveryIpAddress`)
-
-#### Kompatibilität
-
-Alle Änderungen sind rein additiv. Bestehende Dekodierung für 5G, EPS HI2, UmtsCS-HI2 und CC-Payload-Dateien ist unverändert.
-
----
+### v1.3.build_47 (2026-04-09)
+- Vorstufe der build_48-Fixes (unvollständig).
 
 ### v1.2.40 (2026-03-25)
-- **HI4 Support** — LI_HI4 Notification Payload (ETSI TS 102 232-1 §5.6 / 3GPP TS 33.128) vollständig dekodiert: `threeGPP-LI-Notification` → `LINotification` mit `notificationType`, `appliedTargetID` (MSISDN, IMSI, SUPI …), `appliedDeliveryInformation`, Start-/Endzeit
-- **IP-Adressen** — IPv4 (4 Bytes) und IPv6 (16 Bytes) werden jetzt in lesbarer Form angezeigt (z. B. `80.149.242.97` statt `0x5095f261`)
-- **Interaktive OSM-Karte** — Klick auf `latitude`/`longitude`, `geoCoordinates` oder `geographicalCoordinates` öffnet eine scrollbare und zoombare OpenStreetMap-Karte direkt im Detail-Panel (Mausrad = Zoom, Drag = Pan, Doppelklick = Zoom-in); der Button „🗺 In OpenStreetMap öffnen" zeigt den aktuellen Kartenausschnitt
-- **Koordinatenformate** — GSM-Format (`N510344.38`) und Dezimalgrad (`50.964444`) werden beide erkannt und korrekt in die Karte übertragen
-- **Spec-Anzeige** — Die verwendete ETSI/3GPP-Norm und Version werden aus der eingebetteten Domain-OID ermittelt und in der Statuszeile rechts angezeigt (z. B. `ETSI TS 102 232-1 v3.6 | v1.2.40 | Schema: 542 types`)
-- **SMS-Dekodierung erweitert** — `sMSTPDUData`- und `sMSTPDU`-Felder (TS 33.128) lösen ebenfalls den SMS-Decoder aus
+- **HI4 Support** — LI_HI4 Notification Payload vollständig dekodiert
+- **IP-Adressen** — IPv4/IPv6 in lesbarer Form
+- **Interaktive OSM-Karte** — Koordinaten öffnen OpenStreetMap direkt im Detail-Panel
+- **Spec-Anzeige** — ETSI/3GPP-Norm und Version in der Statuszeile
 
 ### v1.2.x (2026-02-xx)
-- **Hex-Viewer** — integrierter Hex-Dump mit klickbaren Bytes; Klick auf ein Byte markiert das zugehörige Feld im Baum
-- **Label-Abdeckung auf ≥ 99 %** gesteigert (1 577 Knoten über 31 Testdateien): vollständige Typ-Ketten für MessagingCC, SNSSAI/TAI, HI2CommunicationIdentifier, UmtsHI2PartyIdentity, CCContents, LIAppliedDeliveryInformation, TargetIdentifier
-- **5G Slice/TAI** — `allowedNSSAI`, `fiveGSTAIList`, `TAIList`, `PLMNID` vollständig beschriftet
-- **IPMMIRI** — IPv6-Adressfelder in SIP-Nachrichten korrekt aufgelöst
-- **SMSTPDUData** — Container-Knoten mit einem Kind werden automatisch dekodiert
-- **Statuszeile** — App-Version aus `package.json` live eingeblendet
-- Drag-and-Drop von BER-Dateien direkt ins Fenster
+- Hex-Viewer mit klickbaren Bytes
+- Label-Abdeckung auf ≥ 99 % (vorherige Testbasis) gesteigert
+- 5G Slice/TAI, IPMMIRI, SMSTPDUData
+- Statuszeile, Drag-and-Drop
 
 ### v1.1.x (2025-12-xx)
-- **Erste stabile Version**
-- BER-Parser mit automatischer Typ-Erkennung (PS-PDU, EPS HI2, UmtsCS HI2, 5G NR)
-- ENUMERATED-Werte als Text (> 210 Typen aus ASN.1-Schemas)
-- MSISDN/IMSI/IMEI BCD-Dekodierung
-- Timestamps in lesbares Datum
-- Rechtsklick-Kontextmenü: Bearbeiten, Kopieren, SMS dekodieren
-- Save As (BER re-serialisiert), Export TXT (Format 1 + 2)
-- Recent Files, ungespeicherte Änderungen werden abgefragt
-- Dark Theme
+- Erste stabile Version
+- BER-Parser mit automatischer Typ-Erkennung
+- ENUMERATED, MSISDN/IMSI/IMEI BCD-Dekodierung, Timestamps
+- Save As, Export TXT, Recent Files, Dark Theme
