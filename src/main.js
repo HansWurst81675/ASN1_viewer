@@ -244,6 +244,25 @@ function buildTagMaps(asn1Dir) {
     3: ['umtsCS-IRIsContent', 'UmtsCS-IRIsContent'],
   };
 
+  // UmtsIRIsContent CHOICE wraps UmtsIRIContent without extra context tags.
+  // The [1..4] tags belong to UmtsIRIContent (iRI-Begin/End/Continue/Report-record).
+  // Map them here so fieldName + correct recurseHint (UmtsIRI-Parameters) are set.
+  maps['UmtsIRIsContent'] = {
+    1: ['iRI-Begin-record',    'UmtsIRI-Parameters'],
+    2: ['iRI-End-record',      'UmtsIRI-Parameters'],
+    3: ['iRI-Continue-record', 'UmtsIRI-Parameters'],
+    4: ['iRI-Report-record',   'UmtsIRI-Parameters'],
+  };
+
+  // UmtsCS-IRIsContent CHOICE wraps UmtsCS-IRIContent without extra context tags.
+  // Same fix: [1..4] belong to UmtsCS-IRIContent and carry UmtsCS-IRI-Parameters.
+  maps['UmtsCS-IRIsContent'] = {
+    1: ['iRI-Begin-record',    'UmtsCS-IRI-Parameters'],
+    2: ['iRI-End-record',      'UmtsCS-IRI-Parameters'],
+    3: ['iRI-Continue-record', 'UmtsCS-IRI-Parameters'],
+    4: ['iRI-Report-record',   'UmtsCS-IRI-Parameters'],
+  };
+
   // UmtsCS-IRI-Parameters: iRIversion[23] is inside an inline ENUMERATED block,
   // so the field-regex skips it (d>0 at the open brace). Patch manually.
   // hi2CSDomainId[0] is also patched here to be sure.
@@ -587,17 +606,18 @@ const EXTRA_HINTS = {
   'LINotification,5':           'GeneralizedTime',
   'LIAppliedDeliveryInformationSEQ,1': 'IPAddress',
   'LIAppliedDeliveryInformationSEQ,3': 'IPAddress',
-  // UmtsCS chain - files starting with [0..4] context tag
-  'UmtsCS-IRIsContent,0':       'UmtsCS-IRIContent',
-  'UmtsCS-IRIsContent,1':       'UmtsCS-IRIContent',
-  'UmtsCS-IRIsContent,2':       'UmtsCS-IRIContent',
-  'UmtsCS-IRIsContent,3':       'UmtsCS-IRIContent',
-  'UmtsCS-IRIsContent,4':       'UmtsCS-IRIContent',
-  // UmtsIRIsContent is also an untagged CHOICE — forward all branch tags to UmtsIRIContent
-  'UmtsIRIsContent,1':          'UmtsIRIContent',
-  'UmtsIRIsContent,2':          'UmtsIRIContent',
-  'UmtsIRIsContent,3':          'UmtsIRIContent',
-  'UmtsIRIsContent,4':          'UmtsIRIContent',
+  // UmtsCS-IRIsContent: [1..4] are UmtsCS-IRIContent branches carrying UmtsCS-IRI-Parameters.
+  // tagMaps['UmtsCS-IRIsContent'] now has these entries; EXTRA_HINTS confirm the recurseHint.
+  'UmtsCS-IRIsContent,1':       'UmtsCS-IRI-Parameters',
+  'UmtsCS-IRIsContent,2':       'UmtsCS-IRI-Parameters',
+  'UmtsCS-IRIsContent,3':       'UmtsCS-IRI-Parameters',
+  'UmtsCS-IRIsContent,4':       'UmtsCS-IRI-Parameters',
+  // UmtsIRIsContent: same pattern for UMTS PS IRI
+  'UmtsIRIsContent,1':          'UmtsIRI-Parameters',
+  'UmtsIRIsContent,2':          'UmtsIRI-Parameters',
+  'UmtsIRIsContent,3':          'UmtsIRI-Parameters',
+  'UmtsIRIsContent,4':          'UmtsIRI-Parameters',
+  // UmtsCS-IRIContent still used when typeHint comes directly from detectTypeHint
   'UmtsCS-IRIContent,1':        'UmtsCS-IRI-Parameters',
   'UmtsCS-IRIContent,2':        'UmtsCS-IRI-Parameters',
   'UmtsCS-IRIContent,3':        'UmtsCS-IRI-Parameters',
@@ -614,6 +634,7 @@ const EXTRA_HINTS = {
   // partyInformation SET OF PartyInformation (EPS, UMTS, UmtsCS)
   'EpsIRI-Parameters,9':        'PartyInformationSEQ',
   'UmtsCS-IRI-Parameters,9':    'PartyInformationSEQ',
+  'UmtsIRI-Parameters,9':       'PartyInformationSEQ',
   'IRI-Parameters,9':           'PartyInformationSEQ',
   // PartyInformation partyIdentity inline SEQUENCE
   'PartyInformation,1':         'UmtsHI2PartyIdentity',   // HI2 format (UmtsCS/EPS)
@@ -636,6 +657,14 @@ const EXTRA_HINTS = {
   'fiveGSTAIList,1':            'TAI',
   // UmtsCS-IRI-Parameters uses HI2Operations CommunicationIdentifier (different from LI-PS-PDU!)
   'UmtsCS-IRI-Parameters,2':    'HI2CommunicationIdentifier',
+  // UmtsIRI-Parameters SMS and location
+  'UmtsIRI-Parameters,8':       'UmtsHI2Location',
+  'UmtsIRI-Parameters,14':      'SMS-report',
+  'UmtsIRI-Parameters,13':      'PartyInformation',
+  // UmtsCS-IRI-Parameters SMS and location
+  'UmtsCS-IRI-Parameters,8':    'UmtsHI2Location',
+  'UmtsCS-IRI-Parameters,14':   'SMS-report',
+  'UmtsCS-IRI-Parameters,13':   'PartyInformation',
   // HI2CommunicationIdentifier[1] = Network-Identifier (same as Network-Identifier in maps)
   'HI2CommunicationIdentifier,1': 'Network-Identifier',
   // UMTSIRI CHOICE (LI-PS-PDU §): [3]=umtsCS-IRIsContent wraps UmtsCS IRI records
