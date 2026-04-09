@@ -74,6 +74,7 @@ chmod +x "dist/BER Viewer-x.x.x.AppImage"
 ```
 ber_viewer_electron/
 ├── package.json
+├── README.md
 ├── asn1_patched/          ← 31 ASN.1-Schemadateien (neben package.json!)
 └── src/
     ├── main.js            ← Electron-Hauptprozess, BER-Parser, IPC
@@ -98,6 +99,7 @@ Der Viewer erkennt den Dateityp automatisch anhand der ersten BER-Bytes und der 
 | **UmtsCS IRI** iRI-Continue | `0xa3` + OID `0.4.0.2.2.4.3.x` | `D2AE*` (Continue) |
 | **UmtsCS IRI** iRI-Report | `0xa4` + OID `0.4.0.2.2.4.3.x` | `E2AG*` |
 | **UmtsCS IRI** (wrapped) | `0xa0` | — |
+| **2G EPS/UmtsCS in LI-PS-PDU** | `0x30` + OID `0.4.0.2.2.5.x` + `uMTSIRI` | `*.li_ps_pdu.ber` |
 
 ---
 
@@ -142,8 +144,6 @@ Der Viewer erkennt den Dateityp automatisch anhand der ersten BER-Bytes und der 
 
 Rechtsklick auf ein `content [4]`-Feld in `sMS-Contents` → **📱 SMS dekodieren**.
 
-> ✅ **Fix:** SMS-SUBMIT messages now decode correctly (TP-MR + TP-VP are handled so the text is read from the right offset).
-
 | Typ | Unterstützung |
 |---|---|
 | SMS-DELIVER | Absender, Zeitstempel, Text |
@@ -168,7 +168,7 @@ Rechtsklick auf ein `content [4]`-Feld in `sMS-Contents` → **📱 SMS dekodier
 
 ## ASN.1-Schema-Auflösung
 
-Beim Start werden alle `*.asn` / `*.asn1`-Dateien aus `asn1_patched/` geladen und zu Tag-Maps verarbeitet. Zusätzlich gibt es hartcodierte **virtuelle Typen** für Felder, die in der ASN.1 als anonyme Inline-SEQUENCEs definiert sind:
+Beim Start werden alle `*.asn` / `*.asn1`-Dateien aus `asn1_patched/` geladen und zu Tag-Maps verarbeitet. Zusätzlich gibt es hartcodierte **virtuelle Typen** für Felder, die in der ASN.1 als anonyme Inline-SEQUENCEs oder durch Schema-Überdeckung nicht korrekt geparst werden:
 
 | Virtueller Typ | Felder |
 |---|---|
@@ -182,8 +182,10 @@ Beim Start werden alle `*.asn` / `*.asn1`-Dateien aus `asn1_patched/` geladen un
 | `SNSSAI` | `sliceServiceType`, `sliceDifferentiator` |
 | `TAI` | `pLMNID`, `tAC`, `nID` |
 | `CCContents` | `payloadDirection`, `messagingCC`, `iPCC`, … |
+| `HI2IPAddress` | `iP-type`, `iP-value` (→ `iPBinaryAddress`) |
+| `UMTSIRI` | `iRI-Parameters`, `umtsIRIsContent`, `umtsCS-IRIsContent` |
 
-### Gemessene Label-Abdeckung (30 Testdateien)
+### Gemessene Label-Abdeckung
 
 | Dateityp | Felder | Labelquote |
 |---|---|---|
@@ -191,8 +193,8 @@ Beim Start werden alle `*.asn` / `*.asn1`-Dateien aus `asn1_patched/` geladen un
 | EPS PS-PDU (`li_ps_pdu_Not5G`) | ~34–61 | **88–95 %** |
 | LI PS-PDU (`li_ps_pdu`) | ~64–75 | **92–96 %** |
 | UmtsCS IRI (`D2AE`, `D2DE`, `E2AG`, `E2GG`) | ~37–56 | **64–95 %** |
+| **2G EPS/UmtsCS in LI-PS-PDU** (`*.ber`) | ~50–170 | **79–96 %** |
 | CC-Payload/Messaging (`DT*`) | ~26 | **85 %** |
-| **Gesamt (1549 Knoten)** | — | **≥ 99 %** |
 
 ---
 
@@ -201,6 +203,7 @@ Beim Start werden alle `*.asn` / `*.asn1`-Dateien aus `asn1_patched/` geladen un
 - Felder ohne ASN.1-Kontextmarkierung (manche SEQUENCE-OF-Elemente) werden mit generischem `SEQUENCE`-Label angezeigt — die Daten sind vollständig sichtbar.
 - Sehr große Dateien (> 50 kB) können das Rendern verlangsamen.
 - Code-Signierung ist deaktiviert (`CSC_IDENTITY_AUTO_DISCOVERY=false` in `package.json`).
+- `UmtsCS-IRIsContent`-Wrapper-Knoten (transparente CHOICE ohne Tag-Nummern) zeigen keinen Feldnamen — das ist korrekt gemäß ASN.1-Spezifikation.
 
 ---
 
@@ -214,6 +217,34 @@ npm start
 ---
 
 ## Changelog
+
+### v1.3.0 (2026-04-09)
+
+#### 2G-Aufzeichnungen (LI-PS-PDU mit UmtsCS/EPS-Payload) — vollständige Dekodierung
+
+- **`uMTSIRI`-Zweig vollständig dekodiert** — bisher wurden alle Felder innerhalb von `IRIContents[4]=uMTSIRI` ohne Label angezeigt. Ursache: Die UMTSIRI-Definition in `LI-PS-PDU.asn` hat einen Kommentar zwischen `CHOICE` und `{`, der vom Regex-Parser nicht erfasst wurde. Fix: hardcodierte `maps['UMTSIRI']`-Einträge für alle vier CHOICE-Zweige (`iRI-Parameters`, `umtsIRIsContent`, `iRI-CS-Parameters`, `umtsCS-IRIsContent`).
+
+- **`umtsCS-IRIsContent[3]`** jetzt korrekt als `umtsCS-IRIsContent` beschriftet (vorher `[3]` ohne Label)
+
+- **`UmtsCS-IRIsContent`-CHOICE** vollständig mit EXTRA_HINTS abgedeckt (Tags 0–4 → `UmtsCS-IRIContent`); bisher nur Tag 0
+
+- **`UmtsIRIsContent`-CHOICE** analog ergänzt (Tags 1–4 → `UmtsIRIContent`)
+
+- **`iRIversion [23]` in `UmtsCS-IRI-Parameters`** jetzt sichtbar — der Wert war wegen des eingebetteten `ENUMERATED`-Blocks nicht parsbar; Patch über direkte Map-Ergänzung
+
+- **`iPBinaryAddress` → lesbares IP-Format** — `ac 17 3b 0a` wird nun als `172.23.59.10` angezeigt. Ursache: `TS33128Payloads_r17.asn` überschreibt die `IPAddress`-Definition aus `HI2Operations.asn` (SEQUENCE `{iP-type, iP-value}`) mit einer gleichnamigen CHOICE-Variante. Fix: neuer virtueller Typ `HI2IPAddress` mit der korrekten SEQUENCE-Struktur; alle HI2/EPS-Elterntypen, die `IPAddress` im HI2-Sinne verwenden, werden über EXTRA_HINTS auf `HI2IPAddress` umgeleitet:
+  - `Network-Element-Identifier[5]` → `HI2IPAddress` (→ `iP-value` → `IP-value` → `iPBinaryAddress`)
+  - `DataNodeAddress[1]` → `HI2IPAddress` (`ipAddress`)
+  - `PacketDataHeaderMapped[1/3]` → `HI2IPAddress` (`sourceIPAddress`, `destinationIPAddress`)
+  - `PacketFlowSummary[1/3]` → `HI2IPAddress`
+  - `EpsIRI-Parameters[53]` → `HI2IPAddress` (`heNBiPAddress`)
+  - `DeliveryInformation[2/3]` → `HI2IPAddress` (`hi2DeliveryIpAddress`, `hi3DeliveryIpAddress`)
+
+#### Kompatibilität
+
+Alle Änderungen sind rein additiv. Bestehende Dekodierung für 5G, EPS HI2, UmtsCS-HI2 und CC-Payload-Dateien ist unverändert.
+
+---
 
 ### v1.2.40 (2026-03-25)
 - **HI4 Support** — LI_HI4 Notification Payload (ETSI TS 102 232-1 §5.6 / 3GPP TS 33.128) vollständig dekodiert: `threeGPP-LI-Notification` → `LINotification` mit `notificationType`, `appliedTargetID` (MSISDN, IMSI, SUPI …), `appliedDeliveryInformation`, Start-/Endzeit
