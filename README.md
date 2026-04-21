@@ -71,7 +71,7 @@ ber_viewer_electron/
 └── src/
     ├── main.js            ← Electron-Hauptprozess, BER-Parser, IPC
     ├── preload.js         ← IPC-Bridge zwischen Main und Renderer
-    ├── renderer.js        ← UI, Tree-Rendering, Edit-Dialog, SMS-Decoder
+    ├── renderer.js        ← UI, Tree-Rendering, Edit-Dialog, SMS-Decoder, SIP-Decoder
     ├── index.html         ← Toolbar, Suchfeld, Baumansicht
     └── style.css          ← Dark Theme
 ```
@@ -124,10 +124,40 @@ Der Viewer erkennt den Dateityp automatisch anhand der ersten BER-Bytes und der 
 | ⊞ Aufklappen | Teilbaum aufklappen |
 | ⊟ Zuklappen | Teilbaum zuklappen |
 | 📱 SMS dekodieren | SMS-PDU-Inhalt anzeigen (nur bei `content`-Feldern) |
+| 📞 SIP dekodieren | SIP/VoIP-Nachricht anzeigen (bei `sIPContent` und automatisch erkannten SIP-Payloads) |
 
 ### Zuletzt geöffnete Dateien
 
 `Datei → Zuletzt geöffnet` — beim Wechsel fragt der Viewer bei ungespeicherten Änderungen nach.
+
+---
+
+## SIP/VoIP-Decoder
+
+Rechtsklick auf ein `sIPContent`-Feld oder jeden anderen Knoten mit erkanntem SIP-Inhalt → **📞 SIP dekodieren**.  
+Alternativ: **Doppelklick** direkt auf den Knoten (SIP-Knoten werden im Baum mit einem `SIP`-Badge markiert).
+
+### Automatische Erkennung
+
+Der Decoder erkennt SIP-Payloads auf zwei Wegen:
+
+1. **Feldname** — `sIPContent`, `sip-Content`, `sipContent`, `uRIorFQDN`, `sIPStartLine`, `SIPMessage`
+2. **Content-Sniffing** — die ersten 20 Bytes beginnen mit einer bekannten SIP-Methode (`INVITE`, `BYE`, `ACK`, `CANCEL`, `OPTIONS`, `REGISTER`, `PRACK`, `UPDATE`, `NOTIFY`, `SUBSCRIBE`, `PUBLISH`, `INFO`, `REFER`, `MESSAGE`) oder mit `SIP/2.0` (Response)
+
+### Dialog-Inhalt
+
+| Bereich | Inhalt |
+|---|---|
+| **Request-/Status-Line** | Methode + Request-URI oder Statuscode + Reason |
+| **Schlüsselfelder** | Von, An, Call-ID, P-Asserted-Identity, IMSI, IMEI, User-Agent, Via |
+| **Alle SIP-Header** | Vollständige Tabelle; wichtige Header (From, To, Call-ID, P-Asserted-Identity, P-Mav-Extension-IMSI/IMEI, P-Called-Party-ID, Contact) grün hervorgehoben |
+| **SDP** | Falls vorhanden: alle SDP-Zeilen (`v=`, `o=`, `c=`, `m=`, `a=` …) mit Typ-Beschriftung |
+
+### Kopier-Funktionen
+
+- **⧉-Button** neben jedem Wert → einzelnen Wert in Zwischenablage
+- **Von / An / Call-ID kopieren** — Footer-Buttons für die wichtigsten Identitäten
+- **Alle Header kopieren** — vollständige SIP-Nachricht als Text (Request-Line + alle Header, CRLF-getrennt)
 
 ---
 
@@ -208,6 +238,13 @@ npm start
 ---
 
 ## Changelog
+
+### v1.4.build_49 (2026-04-21)
+- **SIP/VoIP-Decoder** — Rechtsklick oder Doppelklick auf SIP-Payloads öffnet einen dedizierten Decode-Dialog mit Request-/Status-Line, allen Headern (wichtige grün hervorgehoben), SDP-Block und ⧉-Kopier-Buttons für jeden Wert.
+- **Automatische SIP-Erkennung** — Knoten werden per Feldname (`sIPContent` u.a.) und Content-Sniffing der ersten 20 Bytes als SIP erkannt; unabhängig vom ASN.1-Label.
+- **SIP-Badge im Baum** — SIP-Knoten zeigen ein grünes `SIP`-Badge in der Value-Spalte.
+- **Doppelklick auf SIP-Knoten** öffnet direkt den SIP-Decoder statt des Edit-Dialogs.
+- **Footer-Kopier-Buttons** im SIP-Dialog: Von, An, Call-ID, alle Header auf einmal.
 
 ### v1.3.build_48 (2026-04-09)
 - **2G/UMTS IRI Label-Fix (eingebettete IRIs)** — Wenn UMTS- oder UmtsCS-IRIs innerhalb eines LI-PS-PDU-Wrappers (0x30) vorkommen, wurden alle Felder wie `lawfulInterceptionIdentifier`, `communicationIdentifier`, `timeStamp`, `locationOfTheTarget`, `partyInformation` als unlabeled `[n]` angezeigt. Ursache: `UmtsCS-IRIsContent` und `UmtsIRIsContent` sind reine CHOICE-Wrapper ohne eigene Context-Tags — ihre tagMaps hatten keine Einträge für [1..4], sodass der Parser mit falschem `typeHint` rekursierte. Fix: manuelle Maps für beide Typen mit korrektem `recurseHint` → `UmtsCS-IRI-Parameters` / `UmtsIRI-Parameters`.
