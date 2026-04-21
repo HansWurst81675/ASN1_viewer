@@ -449,6 +449,32 @@ function showContextMenu(x, y, node, row) {
     items.push({ type: 'sep' });
     items.push({ label: '📱  SMS dekodieren', action: () => showSmsDecode(smsTpduNode) });
   }
+  // SIP decode: offer for sIPContent / sip fields and large OCTET blobs that look like SIP
+  const sipFieldNames = new Set(['sIPContent', 'sip-Content', 'sipContent',
+    'uRIorFQDN', 'sIPStartLine', 'sipmessage', 'SIPMessage']);
+  const sipNode = (() => {
+    // Direct leaf node
+    if (!node.children.length && node.rawValue && node.rawValue.length >= 10) {
+      if (sipFieldNames.has(node.fieldName || '')) return node;
+      // Also auto-detect by content: starts with SIP method or "SIP/2.0"
+      const hdr = String.fromCharCode(...node.rawValue.slice(0, 20));
+      if (/^(INVITE|ACK|BYE|CANCEL|OPTIONS|REGISTER|PRACK|UPDATE|NOTIFY|SUBSCRIBE|PUBLISH|INFO|REFER|MESSAGE|SIP\/2\.0)[ \r\n]/.test(hdr)) return node;
+    }
+    // Container with one relevant child
+    if (node.children.length === 1) {
+      const child = node.children[0];
+      if (!child.children.length && child.rawValue && child.rawValue.length >= 10) {
+        if (sipFieldNames.has(child.fieldName || '')) return child;
+        const hdr = String.fromCharCode(...child.rawValue.slice(0, 20));
+        if (/^(INVITE|ACK|BYE|CANCEL|OPTIONS|REGISTER|PRACK|UPDATE|NOTIFY|SUBSCRIBE|PUBLISH|INFO|REFER|MESSAGE|SIP\/2\.0)[ \r\n]/.test(hdr)) return child;
+      }
+    }
+    return null;
+  })();
+  if (sipNode) {
+    if (!smsTpduNode) items.push({ type: 'sep' });
+    items.push({ label: '📞  SIP dekodieren', action: () => showSipDecode(sipNode) });
+  }
   if (node.children.length) {
     items.push({ label: '⊞  Aufklappen',   action: () => setExpanded(row, node, true) });
     items.push({ label: '⊟  Zuklappen',    action: () => setExpanded(row, node, false) });
@@ -702,6 +728,219 @@ function showSmsDecode(node) {
   };
 }
 
+// ── SIP Decoder ───────────────────────────────────────────────────────────────
+function parseSipMessage(raw) {
+  let text;
+  try { text = new TextDecoder('utf-8').decode(new Uint8Array(raw)); }
+  catch { text = String.fromCharCode(...raw); }
+
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  const result = { requestLine: lines[0] || '', headers: [], body: '', sdp: [], errors: [] };
+
+  // Determine message type/direction
+  const rl = result.requestLine;
+  if (/^SIP\/2\.0\s+\d+/.test(rl)) {
+    const m = rl.match(/^SIP\/2\.0\s+(\d+)\s+(.*)/);
+    result.direction = 'response';
+    result.statusCode = m ? m[1] : '?';
+    result.reasonPhrase = m ? m[2] : '';
+  } else {
+    const m = rl.match(/^(\S+)\s+(\S+)\s+SIP\/2\.0/);
+    result.direction = 'request';
+    result.method = m ? m[1] : '';
+    result.requestUri = m ? m[2] : '';
+  }
+
+  // Parse headers (handle folded lines)
+  let i = 1;
+  const rawHdrs = [];
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line === '') { i++; break; }
+    if (line && (line[0] === ' ' || line[0] === '\t') && rawHdrs.length) {
+      rawHdrs[rawHdrs.length - 1] += ' ' + line.trim();
+    } else {
+      rawHdrs.push(line);
+    }
+    i++;
+  }
+  for (const h of rawHdrs) {
+    const idx = h.indexOf(':');
+    if (idx > 0) {
+      result.headers.push({ name: h.slice(0, idx).trim(), value: h.slice(idx + 1).trim() });
+    }
+  }
+
+  // Body
+  const body = lines.slice(i).join('\n').trim();
+  result.body = body;
+
+  // Parse SDP if present
+  if (body && /^v=0/.test(body)) {
+    const sdpTypeNames = {
+      v:'Version', o:'Ursprung', s:'Session', c:'Verbindung', b:'Bandbreite',
+      t:'Zeit', a:'Attribut', m:'Media', e:'E-Mail', p:'Telefon', i:'Info',
+      u:'URI', z:'Zeitzone', k:'Schlüssel', r:'Wiederholung'
+    };
+    for (const bl of body.split('\n')) {
+      const b = bl.trim();
+      if (b && b[1] === '=') {
+        result.sdp.push({ type: b[0], typeName: sdpTypeNames[b[0]] || b[0], value: b.slice(2) });
+      }
+    }
+  }
+
+  // Extract key identities
+  const hdrMap = {};
+  for (const h of result.headers) hdrMap[h.name.toLowerCase()] = h.value;
+  result.from      = hdrMap['from'] || '';
+  result.to        = hdrMap['to'] || '';
+  result.callId    = hdrMap['call-id'] || '';
+  result.imsi      = hdrMap['p-mav-extension-imsi'] || hdrMap['p-charging-vector']?.match(/imsi=([^;]+)/)?.[1] || '';
+  result.imei      = hdrMap['p-mav-extension-imei'] || '';
+  result.pai       = hdrMap['p-asserted-identity'] || '';
+  result.via       = hdrMap['via'] || '';
+  result.contact   = hdrMap['contact'] || '';
+  result.userAgent = hdrMap['user-agent'] || '';
+
+  return result;
+}
+
+// Extract a phone number from a SIP/tel URI string
+function extractNumber(uri) {
+  if (!uri) return uri;
+  const m = uri.match(/(?:tel:|sip:)(\+?[\d]+)@?/) || uri.match(/<(?:tel:|sip:)(\+?[\d]+)/);
+  return m ? m[1] : uri;
+}
+
+function showSipDecode(node) {
+  const raw = node.rawValue || [];
+  const sip = parseSipMessage(raw);
+
+  const existing = document.getElementById('edit-dialog');
+  if (existing) existing.remove();
+
+  // Build key fields summary
+  const summaryRows = [];
+  if (sip.direction === 'request') {
+    summaryRows.push(['Methode', sip.method || '?']);
+    summaryRows.push(['Request-URI', sip.requestUri || '?']);
+  } else {
+    summaryRows.push(['Status', `${sip.statusCode} ${sip.reasonPhrase}`]);
+  }
+  if (sip.from)      summaryRows.push(['Von',      sip.from]);
+  if (sip.to)        summaryRows.push(['An',       sip.to]);
+  if (sip.callId)    summaryRows.push(['Call-ID',  sip.callId]);
+  if (sip.pai)       summaryRows.push(['P-Asserted-Identity', sip.pai]);
+  if (sip.imsi)      summaryRows.push(['IMSI',     sip.imsi]);
+  if (sip.imei)      summaryRows.push(['IMEI',     sip.imei]);
+  if (sip.userAgent) summaryRows.push(['User-Agent', sip.userAgent]);
+  if (sip.via)       summaryRows.push(['Via',      sip.via]);
+
+  // Build header table rows HTML
+  const hdrHtml = sip.headers.map(h => {
+    const esc = v => v.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const isKey = ['From','To','Call-ID','P-Asserted-Identity','P-Mav-Extension-IMSI',
+                   'P-Mav-Extension-IMEI','P-Called-Party-ID','Contact'].includes(h.name);
+    return `<tr>
+      <td style="color:var(--text-muted);padding:2px 10px 2px 0;white-space:nowrap;vertical-align:top">${esc(h.name)}</td>
+      <td style="color:${isKey?'var(--green)':'var(--text)'};word-break:break-all">${esc(h.value)}
+        <span class="sip-copy-btn" data-val="${esc(h.value)}" title="Kopieren">⧉</span></td>
+    </tr>`;
+  }).join('');
+
+  // SDP table
+  const sdpHtml = sip.sdp.length ? `
+    <div style="margin-top:10px;font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">SDP — Session Description</div>
+    <table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:4px">
+    ${sip.sdp.map(l => {
+      const esc = v => v.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const isMedia = l.type === 'm' || l.type === 'c' || l.type === 'o';
+      return `<tr>
+        <td style="color:var(--accent);padding:1px 8px 1px 0;white-space:nowrap;font-weight:bold;vertical-align:top">${l.type}=</td>
+        <td title="${l.typeName}" style="color:${isMedia?'var(--green)':'var(--text)'};word-break:break-all">${esc(l.value)}
+          <span class="sip-copy-btn" data-val="${esc(l.value)}" title="Kopieren">⧉</span></td>
+      </tr>`;
+    }).join('')}
+    </table>` : '';
+
+  const dlg = document.createElement('div');
+  dlg.id = 'edit-dialog';
+  dlg.innerHTML = `
+    <div id="edit-overlay"></div>
+    <div id="edit-box" style="width:620px;max-height:85vh;overflow-y:auto">
+      <div id="edit-title">📞 SIP Nachricht
+        <span id="edit-type">${(node.fieldName||'SIP')} · ${raw.length} B</span>
+      </div>
+
+      <div style="background:var(--bg-alt);border-radius:4px;padding:6px 10px;margin-bottom:10px;font-size:12px;font-family:monospace;color:var(--green);word-break:break-all">
+        ${sip.requestLine.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+      </div>
+
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Schlüsselfelder</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px">
+        ${summaryRows.map(([k,v]) => {
+          const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          return `<tr>
+            <td style="color:var(--text-muted);padding:2px 10px 2px 0;white-space:nowrap;width:160px">${esc(k)}</td>
+            <td style="color:var(--green);word-break:break-all">${esc(v)}
+              <span class="sip-copy-btn" data-val="${esc(v)}" title="Kopieren">⧉</span></td>
+          </tr>`;
+        }).join('')}
+      </table>
+
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Alle SIP Header (${sip.headers.length})</div>
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
+        ${hdrHtml}
+      </table>
+
+      ${sdpHtml}
+
+      <div id="edit-buttons" style="margin-top:14px;flex-wrap:wrap;gap:6px">
+        <button id="sip-close-btn">Schließen</button>
+        <button id="sip-copy-from-btn">Von kopieren</button>
+        <button id="sip-copy-to-btn">An kopieren</button>
+        <button id="sip-copy-callid-btn">Call-ID kopieren</button>
+        <button id="sip-copy-all-btn">Alle Header kopieren</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(dlg);
+
+  // Inline copy buttons (⧉)
+  dlg.querySelectorAll('.sip-copy-btn').forEach(btn => {
+    btn.style.cssText = 'cursor:pointer;opacity:0.5;font-size:10px;margin-left:4px;user-select:none';
+    btn.onclick = e => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(btn.dataset.val || '');
+      statusLeft.textContent = 'Kopiert: ' + (btn.dataset.val || '').slice(0, 60);
+    };
+    btn.onmouseenter = () => btn.style.opacity = '1';
+    btn.onmouseleave = () => btn.style.opacity = '0.5';
+  });
+
+  dlg.querySelector('#edit-overlay').onclick = () => dlg.remove();
+  dlg.querySelector('#sip-close-btn').onclick = () => dlg.remove();
+
+  dlg.querySelector('#sip-copy-from-btn').onclick = () => {
+    navigator.clipboard.writeText(sip.from);
+    statusLeft.textContent = 'Von kopiert: ' + sip.from.slice(0, 60);
+  };
+  dlg.querySelector('#sip-copy-to-btn').onclick = () => {
+    navigator.clipboard.writeText(sip.to);
+    statusLeft.textContent = 'An kopiert: ' + sip.to.slice(0, 60);
+  };
+  dlg.querySelector('#sip-copy-callid-btn').onclick = () => {
+    navigator.clipboard.writeText(sip.callId);
+    statusLeft.textContent = 'Call-ID kopiert';
+  };
+  dlg.querySelector('#sip-copy-all-btn').onclick = () => {
+    const all = sip.requestLine + '\r\n' + sip.headers.map(h => `${h.name}: ${h.value}`).join('\r\n');
+    navigator.clipboard.writeText(all);
+    statusLeft.textContent = `Alle Header kopiert (${sip.headers.length} Felder)`;
+  };
+}
+
 // ── Edit dialog ───────────────────────────────────────────────────────────────
 function openEditDialog(node, row) {
   // Remove any existing dialog
@@ -846,18 +1085,38 @@ function renderNodes(nodes, container, depth) {
     const tc=makeCell('col-tag',node.tagLabel); if(node.cls===0)tc.classList.add('univ'); row.appendChild(tc);
     row.appendChild(makeCell('col-name', node.fieldName||node.typeName||node.tagLabel));
     let vt='',dim=false;
+    // Detect SIP content for badge and quick-decode
+    const isSipNode = (() => {
+      if (node.children.length || !node.rawValue || node.rawValue.length < 10) return false;
+      const sipFieldNames = new Set(['sIPContent','sip-Content','sipContent','uRIorFQDN','sIPStartLine','sipmessage','SIPMessage']);
+      if (sipFieldNames.has(node.fieldName||'')) return true;
+      const hdr = String.fromCharCode(...node.rawValue.slice(0,20));
+      return /^(INVITE|ACK|BYE|CANCEL|OPTIONS|REGISTER|PRACK|UPDATE|NOTIFY|SUBSCRIBE|PUBLISH|INFO|REFER|MESSAGE|SIP\/2\.0)[ \r\n]/.test(hdr);
+    })();
     if(node.displayValue!=null) vt=String(node.displayValue).slice(0,120);
     else if(node.children.length){vt=`${node.typeName||'CONSTRUCTED'} (${node.length} B)`;dim=true;}
     const vc=makeCell('col-value',vt); if(dim)vc.classList.add('dim');
     if(node._modified) vc.style.color='var(--orange)';
     row.appendChild(vc);
+    // SIP badge
+    if (isSipNode) {
+      const badge = document.createElement('span');
+      badge.textContent = 'SIP';
+      badge.style.cssText = 'font-size:9px;background:var(--accent);color:#fff;border-radius:3px;padding:0 4px;margin-left:6px;flex-shrink:0;opacity:0.85;letter-spacing:0.3px';
+      row.appendChild(badge);
+    }
     row.appendChild(makeCell('col-size',node.length.toString(16)));
 
-    // Single click = select, Double click = edit (primitives only)
+    // Single click = select, Double click = edit (primitives only), SIP nodes → decode
     row.onclick = () => selectRow(row, node);
     if(!node.children.length){
-      row.ondblclick = e => { e.stopPropagation(); openEditDialog(node, row); };
-      row.title = 'Double-click to edit';
+      if (isSipNode) {
+        row.ondblclick = e => { e.stopPropagation(); showSipDecode(node); };
+        row.title = 'Double-click: SIP dekodieren  |  Rechtsklick: Menü';
+      } else {
+        row.ondblclick = e => { e.stopPropagation(); openEditDialog(node, row); };
+        row.title = 'Double-click to edit';
+      }
     }
 
     // Right-click context menu

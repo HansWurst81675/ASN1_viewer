@@ -1,6 +1,6 @@
 {
   "name": "ber-viewer",
-  "version": "1.3.build_48",
+  "version": "1.4.build_49",
   "description": "BER Editor  — ETSI LI PS-PDU / 3GPP Lawful Intercept",
   "author": "LI Tools",
   "main": "src/main.js",
