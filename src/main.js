@@ -2,6 +2,10 @@ const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const path = require('path');
 const fs   = require('fs');
 
+// Suppress harmless Chromium GPU-cache / disk-cache warnings on Windows
+// (Electron tries to move the cache to a locked temp dir — non-fatal)
+app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
+app.commandLine.appendSwitch('disk-cache-size', '1');
 // ── Resolve asn1_patched directory ────────────────────────────────────────────
 function getAsn1Dir() {
   const candidates = [
@@ -433,6 +437,9 @@ function getEnumMaps() {
 function decodeGeneralizedTime(s) {
   try {
     const clean = s.trim();
+    // Already ISO-formatted (YYYY-MM-DD …) — return as-is (defensive: shouldn't happen in valid BER)
+    if (/^\d{4}-\d{2}-\d{2}/.test(clean)) return clean;
+    // ASN.1 GeneralizedTime: YYYYMMDDHHmmSS[.frac][Z]
     const base  = clean.replace(/[Z.].*/,'');
     const frac  = clean.match(/\.(\d+)/)?.[1] ?? '';
     const tz    = clean.endsWith('Z') ? 'Z' : '';
