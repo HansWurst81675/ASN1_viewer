@@ -948,6 +948,8 @@ function openEditDialog(node, row) {
   if(existing) existing.remove();
 
   const isHex = node.rawValue && !isTextPrimitive(node);
+  const isGenTime = (node.cls === 0 && (node.tag === 24 || node.tag === 23)) ||
+                    (node.cls === 2 && (node.origChildType === 'GeneralizedTime' || node.origChildType === 'UTCTime'));
   const currentVal = isHex
     ? Array.from(node.rawValue).map(b => b.toString(16).padStart(2,'0')).join(' ')
     : (node.displayValue ?? '');
@@ -960,7 +962,7 @@ function openEditDialog(node, row) {
       <div id="edit-title">${node.fieldName||node.tagLabel}
         <span id="edit-type">${node.typeName||''}</span>
       </div>
-      <div id="edit-hint">${isHex ? 'Hex bytes (space-separated)' : 'Text value'}</div>
+      <div id="edit-hint">${isHex ? 'Hex bytes (space-separated)' : isGenTime ? 'Date/Time: YYYY-MM-DD HH:MM:SS[.mmm]Z' : 'Text value'}</div>
       <textarea id="edit-input" spellcheck="false">${currentVal}</textarea>
       <div id="edit-buttons">
         <button id="edit-cancel">Cancel</button>
@@ -1031,10 +1033,62 @@ function applyEdit(node, inputVal, isHex, errDiv) {
     const bytes=[];
     for(let i=0;i<hexStr.length;i+=2) bytes.push(parseInt(hexStr.slice(i,i+2),16));
     return bytes;
-  } else {
-    // Text → encode as UTF-8 bytes
-    return Array.from(new TextEncoder().encode(inputVal));
   }
+
+  // For GeneralizedTime / UTCTime nodes: convert ISO-8601 input → ASN.1 GeneralizedTime string
+  // Accepts: "2026-04-23 09:44:01.608Z", "2026-04-23T09:44:01.608Z", "20260423094401.608Z"
+  const isGenTime = (node.cls === 0 && (node.tag === 24 || node.tag === 23)) ||
+                    (node.cls === 2 && (node.origChildType === 'GeneralizedTime' || node.origChildType === 'UTCTime'));
+  if (isGenTime) {
+    const asn1 = isoToGeneralizedTime(inputVal.trim());
+    if (asn1 === null) {
+      errDiv.textContent = 'Invalid date — use: YYYY-MM-DD HH:MM:SS[.mmm]Z or YYYYMMDDHHmmSS[.mmm]Z';
+      return null;
+    }
+    return Array.from(new TextEncoder().encode(asn1));
+  }
+
+  // Text → encode as UTF-8 bytes
+  return Array.from(new TextEncoder().encode(inputVal));
+}
+
+/**
+ * Convert a human-readable date string to ASN.1 GeneralizedTime format.
+ * Accepts ISO-8601 ("2026-04-23 09:44:01.608Z", "2026-04-23T09:44:01.608Z")
+ * and already-correct ASN.1 format ("20260423094401.608Z").
+ * Returns null on parse failure.
+ */
+function isoToGeneralizedTime(s) {
+  // Already in ASN.1 GeneralizedTime format: YYYYMMDDHHmmSS[.frac][Z]
+  if (/^\d{14}(\.\d+)?Z?$/.test(s)) return s;
+
+  // ISO-8601 with separators: YYYY-MM-DD[T ]HH:MM:SS[.mmm][Z]
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z)?$/);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, sc, frac, tz] = m;
+  const fracPart = frac ? '.' + frac : '';
+  const tzPart   = tz  ? 'Z' : '';
+  return `${y}${mo}${d}${h}${mi}${sc}${fracPart}${tzPart}`;
+}
+
+/**
+ * Mirror of main.js decodeGeneralizedTime — converts ASN.1 GeneralizedTime string
+ * (e.g. "20260423094401.608Z") to a human-readable form ("2026-04-23 09:44:01.608Z").
+ * Also tolerates already-formatted ISO strings (pass-through).
+ */
+function decodeGeneralizedTimeRenderer(s) {
+  try {
+    const clean = s.trim();
+    // Already ISO formatted (contains dashes/colons) — return as-is
+    if (/^\d{4}-\d{2}-\d{2}/.test(clean)) return clean;
+    const base = clean.replace(/[Z.].*/,'');
+    const frac = clean.match(/\.(\d+)/)?.[1] ?? '';
+    const tz   = clean.endsWith('Z') ? 'Z' : '';
+    const y=base.slice(0,4),mo=base.slice(4,6),d=base.slice(6,8);
+    const h=base.slice(8,10),mi=base.slice(10,12),sc=base.slice(12,14)||'00';
+    const ms = frac ? '.' + frac.slice(0,3).padEnd(3,'0') : '';
+    return `${y}-${mo}-${d} ${h}:${mi}:${sc}${ms}${tz}`;
+  } catch { return s; }
 }
 
 function recomputeDisplayValue(node) {
@@ -1046,10 +1100,15 @@ function recomputeDisplayValue(node) {
       if(buf[0]&0x80)v-=(1n<<BigInt(buf.length*8));
       const vn=Number(v); return`${vn},  0x${vn.toString(16)}`;
     }
-    if([12,19,22,26,30,23,24].includes(node.tag)) return new TextDecoder().decode(buf);
+    if([23,24].includes(node.tag)) return decodeGeneralizedTimeRenderer(new TextDecoder().decode(buf));
+    if([12,19,22,26,30].includes(node.tag)) return new TextDecoder().decode(buf);
     if(node.tag===6){ // OID – simplified
       return '0x'+Array.from(buf).map(b=>b.toString(16).padStart(2,'0')).join('');
     }
+  }
+  // Context-tagged GeneralizedTime / UTCTime
+  if (node.cls === 2 && (node.origChildType === 'GeneralizedTime' || node.origChildType === 'UTCTime')) {
+    return decodeGeneralizedTimeRenderer(new TextDecoder().decode(buf));
   }
   // Default: printable string or hex
   const s=new TextDecoder().decode(buf);
