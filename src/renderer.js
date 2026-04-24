@@ -947,12 +947,25 @@ function openEditDialog(node, row) {
   const existing = document.getElementById('edit-dialog');
   if(existing) existing.remove();
 
-  const isHex = node.rawValue && !isTextPrimitive(node);
+  const isHex = node.rawValue && !isTextPrimitive(node) && !isUnixTimestampNode(node);
   const isGenTime = (node.cls === 0 && (node.tag === 24 || node.tag === 23)) ||
                     (node.cls === 2 && (node.origChildType === 'GeneralizedTime' || node.origChildType === 'UTCTime'));
-  const currentVal = isHex
-    ? Array.from(node.rawValue).map(b => b.toString(16).padStart(2,'0')).join(' ')
-    : (node.displayValue ?? '');
+  const isUnixTs = isUnixTimestampNode(node);
+
+  // For Unix timestamp: strip the "(seconds, 0x…)" suffix so user sees/edits only the date
+  let currentVal;
+  if (isHex) {
+    currentVal = Array.from(node.rawValue).map(b => b.toString(16).padStart(2,'0')).join(' ');
+  } else if (isUnixTs) {
+    currentVal = (node.displayValue ?? '').replace(/\s*\(.*\)\s*$/, '').trim();
+  } else {
+    currentVal = node.displayValue ?? '';
+  }
+
+  const hintText = isHex     ? 'Hex bytes (space-separated)'
+                 : isGenTime ? 'Date/Time: YYYY-MM-DD HH:MM:SS[.mmm]Z'
+                 : isUnixTs  ? 'Date/Time: YYYY-MM-DD HH:MM:SSZ  (stored as Unix timestamp)'
+                 :             'Text value';
 
   const dlg = document.createElement('div');
   dlg.id = 'edit-dialog';
@@ -962,7 +975,7 @@ function openEditDialog(node, row) {
       <div id="edit-title">${node.fieldName||node.tagLabel}
         <span id="edit-type">${node.typeName||''}</span>
       </div>
-      <div id="edit-hint">${isHex ? 'Hex bytes (space-separated)' : isGenTime ? 'Date/Time: YYYY-MM-DD HH:MM:SS[.mmm]Z' : 'Text value'}</div>
+      <div id="edit-hint">${hintText}</div>
       <textarea id="edit-input" spellcheck="false">${currentVal}</textarea>
       <div id="edit-buttons">
         <button id="edit-cancel">Cancel</button>
@@ -1007,9 +1020,22 @@ function openEditDialog(node, row) {
   });
 }
 
+function isUnixTimestampNode(node) {
+  // Context-tagged INTEGER whose displayValue contains a Unix timestamp date
+  // e.g. "2025-12-17 09:53:26Z  (1765965206, 0x69427d96)"
+  if (node.cls === 2 && node.origChildType === 'INTEGER') {
+    const s = node.displayValue ?? '';
+    // Matches: "YYYY-MM-DD HH:MM:SSZ  (digits, 0x...)"
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(s)) return true;
+  }
+  return false;
+}
+
 function isTextPrimitive(node) {
   // UNIVERSAL string/time tags
   if (node.cls === 0 && [12,19,22,26,30,23,24].includes(node.tag)) return true;
+  // Context-tagged INTEGER with known numeric encoding — never treat as text via bytes
+  if (node.cls === 2 && node.origChildType === 'INTEGER') return false;
   // Check raw bytes: if all printable ASCII → treat as text
   if (node.rawValue && node.rawValue.length > 0) {
     const allPrintable = node.rawValue.every(b => b >= 0x20 && b <= 0x7e);
@@ -1032,6 +1058,21 @@ function applyEdit(node, inputVal, isHex, errDiv) {
     }
     const bytes=[];
     for(let i=0;i<hexStr.length;i+=2) bytes.push(parseInt(hexStr.slice(i,i+2),16));
+    return bytes;
+  }
+
+  // For Unix timestamp INTEGER nodes: parse ISO date → Big-Endian 4-byte integer
+  if (isUnixTimestampNode(node)) {
+    const sec = isoToUnixSeconds(inputVal.trim());
+    if (sec === null) {
+      errDiv.textContent = 'Invalid date — use: YYYY-MM-DD HH:MM:SSZ';
+      return null;
+    }
+    // Encode as Big-Endian, same byte length as original
+    const origLen = (node.rawValue && node.rawValue.length >= 4) ? node.rawValue.length : 4;
+    const bytes = [];
+    let v = sec;
+    for (let i = origLen - 1; i >= 0; i--) { bytes[i] = v & 0xff; v >>>= 8; }
     return bytes;
   }
 
@@ -1058,6 +1099,21 @@ function applyEdit(node, inputVal, isHex, errDiv) {
  * and already-correct ASN.1 format ("20260423094401.608Z").
  * Returns null on parse failure.
  */
+/**
+ * Parse "YYYY-MM-DD HH:MM:SS[Z]" or "YYYY-MM-DDTHH:MM:SS[Z]" → Unix seconds (integer).
+ * Returns null on failure.
+ */
+function isoToUnixSeconds(s) {
+  // Strip trailing annotation like "  (1765965206, 0x...)" if user pasted the full display value
+  const clean = s.replace(/\s*\(.*\)\s*$/, '').trim();
+  const m = clean.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z)?$/);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, sc] = m;
+  const ms = Date.UTC(+y, +mo-1, +d, +h, +mi, +sc, 0);
+  if (isNaN(ms)) return null;
+  return Math.round(ms / 1000);
+}
+
 function isoToGeneralizedTime(s) {
   // Already in ASN.1 GeneralizedTime format: YYYYMMDDHHmmSS[.frac][Z]
   if (/^\d{14}(\.\d+)?Z?$/.test(s)) return s;
@@ -1105,6 +1161,17 @@ function recomputeDisplayValue(node) {
     if(node.tag===6){ // OID – simplified
       return '0x'+Array.from(buf).map(b=>b.toString(16).padStart(2,'0')).join('');
     }
+  }
+  // Context-tagged INTEGER decoded as Unix timestamp
+  if (node.cls === 2 && node.origChildType === 'INTEGER') {
+    let v = 0n; for (const b of buf) v = (v << 8n) | BigInt(b);
+    if (buf.length > 0 && buf[0] & 0x80) v -= (1n << BigInt(buf.length * 8));
+    const vn = Number(v);
+    if (node.fieldName === 'seconds' && vn > 1000000000 && vn < 2147483647) {
+      const d = new Date(vn * 1000);
+      return `${d.toISOString().replace('T',' ').replace('.000Z','Z')}  (${vn}, 0x${vn.toString(16)})`;
+    }
+    return `${vn},  0x${vn.toString(16)}`;
   }
   // Context-tagged GeneralizedTime / UTCTime
   if (node.cls === 2 && (node.origChildType === 'GeneralizedTime' || node.origChildType === 'UTCTime')) {
