@@ -46,6 +46,20 @@ function buildTagMaps(asn1Dir) {
   if (!asn1Dir || !fs.existsSync(asn1Dir)) return maps;
   const files = fs.readdirSync(asn1Dir).filter(f => f.endsWith('.asn') || f.endsWith('.asn1')).sort();
   const fieldRe = /\b([a-z][A-Za-z0-9-]*)\s+\[(\d+)\]\s+(?:IMPLICIT\s+|OPTIONAL\s+)?([A-Z][A-Za-z0-9-]*)/;
+  // Extracts SIZE (min..max) or SIZE (exact) and integer value range (min..max) from a field line.
+  // Returns { min, max } or null.
+  function extractConstraint(line) {
+    // SIZE (min..max) or SIZE(min..max)
+    let m = line.match(/SIZE\s*\(\s*(\d+)\s*\.\.\s*(\d+)\s*\)/);
+    if (m) return { min: parseInt(m[1]), max: parseInt(m[2]) };
+    // SIZE (exact) — single value
+    m = line.match(/SIZE\s*\(\s*(\d+)\s*\)/);
+    if (m) return { min: parseInt(m[1]), max: parseInt(m[1]) };
+    // INTEGER value range (min..max) — without SIZE keyword
+    m = line.match(/INTEGER\s*\(\s*(\d+)\s*\.\.\s*(\d+)\s*\)/);
+    if (m) return { min: parseInt(m[1]), max: parseInt(m[2]) };
+    return null;
+  }
 
   for (const fname of files) {
     const content = fs.readFileSync(path.join(asn1Dir, fname), 'utf8');
@@ -70,7 +84,7 @@ function buildTagMaps(asn1Dir) {
           if (d === 0) {  // emit line before entering block
             const line = body.slice(lineStart, j).replace(/--.*/, '');
             const fm = fieldRe.exec(line);
-            if (fm) tmap[parseInt(fm[2])] = [fm[1], fm[3]];
+            if (fm) { const c = extractConstraint(line); tmap[parseInt(fm[2])] = c ? [fm[1], fm[3], c] : [fm[1], fm[3]]; }
           }
           d++; lineStart = j + 1; continue;
         }
@@ -82,7 +96,7 @@ function buildTagMaps(asn1Dir) {
         if ((ch === '\n' || ch === null) && d === 0) {
           const line = body.slice(lineStart, j).replace(/--.*/, '');
           const fm = fieldRe.exec(line);
-          if (fm) tmap[parseInt(fm[2])] = [fm[1], fm[3]];
+          if (fm) { const c = extractConstraint(line); tmap[parseInt(fm[2])] = c ? [fm[1], fm[3], c] : [fm[1], fm[3]]; }
           lineStart = j + 1;
         }
       }
@@ -758,6 +772,7 @@ function parseBer(buf, baseOffset, typeHint, tagMaps, depth) {
         if(entry){
           node.fieldName=entry[0]; childType=entry[1];
           node.typeName=childType; node.origChildType=childType;
+          if(entry[2]) node.constraint=entry[2];
           if(GENERIC_TYPES.has(childType)) childType=null;
         }
       }
