@@ -90,7 +90,29 @@ window.berApi.onFileLoaded(data => {
   buildTree(data.nodes);
   renderHexViewer(data.hexDump);
   fileInfo.textContent = `${data.fileName}  —  ${data.size} bytes`;
-  statusLeft.textContent = `${data.fileName}  |  ${data.size} bytes  |  ${countNodes(data.nodes)} fields`;
+
+  // Scan for ASN.1 SIZE constraint violations on load
+  const violations = [];
+  (function scanConstraints(nodes) {
+    for (const n of nodes) {
+      if (n.constraint && n.rawValue && !n.cons) {
+        const len = n.rawValue.length;
+        const { min, max } = n.constraint;
+        if (len < min || len > max) {
+          violations.push(`${n.fieldName||n.tagLabel}: ${len} byte(s) — allowed SIZE ${min}..${max}`);
+        }
+      }
+      if (n.children && n.children.length) scanConstraints(n.children);
+    }
+  })(data.nodes);
+
+  if (violations.length > 0) {
+    statusLeft.textContent = `⚠️ ${violations.length} SIZE violation(s): ${violations.join('  |  ')}  — external decoders may reject this file`;
+    statusLeft.title = violations.join('\n');
+  } else {
+    statusLeft.textContent = `${data.fileName}  |  ${data.size} bytes  |  ${countNodes(data.nodes)} fields`;
+    statusLeft.title = '';
+  }
 
   // Detect spec from embedded domain OID and update right status
   const domainOid = findDomainOid(data.nodes);
@@ -967,6 +989,14 @@ function openEditDialog(node, row) {
                  : isUnixTs  ? 'Date/Time: YYYY-MM-DD HH:MM:SSZ  (stored as Unix timestamp)'
                  :             'Text value';
 
+  // Build constraint hint string
+  const con = node.constraint;
+  let constraintHint = '';
+  if (con && !isHex) {
+    if (con.min === con.max) constraintHint = `SIZE: exactly ${con.min} characters/bytes`;
+    else constraintHint = `SIZE: ${con.min}..${con.max} characters/bytes`;
+  }
+
   const dlg = document.createElement('div');
   dlg.id = 'edit-dialog';
   dlg.innerHTML = `
@@ -975,7 +1005,7 @@ function openEditDialog(node, row) {
       <div id="edit-title">${node.fieldName||node.tagLabel}
         <span id="edit-type">${node.typeName||''}</span>
       </div>
-      <div id="edit-hint">${hintText}</div>
+      <div id="edit-hint">${hintText}${constraintHint ? ' &nbsp;·&nbsp; <span style="color:var(--orange)">' + constraintHint + '</span>' : ''}</div>
       <textarea id="edit-input" spellcheck="false">${currentVal}</textarea>
       <div id="edit-buttons">
         <button id="edit-cancel">Cancel</button>
@@ -993,8 +1023,9 @@ function openEditDialog(node, row) {
   dlg.querySelector('#edit-cancel').onclick = () => dlg.remove();
   dlg.querySelector('#edit-overlay').onclick = () => dlg.remove();
 
+  let _constraintWarned = false;
   dlg.querySelector('#edit-ok').onclick = () => {
-    const raw = applyEdit(node, input.value.trim(), isHex, errDiv);
+    const raw = applyEdit(node, input.value.trim(), isHex, errDiv, _constraintWarned, (v) => { _constraintWarned = v; });
     if(raw === null) return;
     node.rawValue = raw;
     node.displayValue = recomputeDisplayValue(node);
@@ -1047,7 +1078,7 @@ function isTextPrimitive(node) {
   return false;
 }
 
-function applyEdit(node, inputVal, isHex, errDiv) {
+function applyEdit(node, inputVal, isHex, errDiv, _constraintWarned=false, setWarned=(v)=>{}) {
   errDiv.textContent = '';
   if(isHex){
     // Parse hex string
@@ -1090,7 +1121,26 @@ function applyEdit(node, inputVal, isHex, errDiv) {
   }
 
   // Text → encode as UTF-8 bytes
-  return Array.from(new TextEncoder().encode(inputVal));
+  const encoded = Array.from(new TextEncoder().encode(inputVal));
+  // Check SIZE constraint if present
+  if (node.constraint && !isHex) {
+    const len = encoded.length;
+    const { min, max } = node.constraint;
+    if (len < min || len > max) {
+      const rangeStr = min === max ? `exactly ${min}` : `${min}..${max}`;
+      errDiv.textContent = `ASN.1 SIZE constraint violation: value is ${len} byte(s), allowed: ${rangeStr}. External decoders will reject this file.`;
+      errDiv.style.color = 'var(--orange)';
+      // Show as a warning, not a hard block — allow override via second click
+      if (!_constraintWarned) {
+        setWarned(true);
+        return null;
+      }
+      setWarned(false);
+    } else {
+      setWarned(false);
+    }
+  }
+  return encoded;
 }
 
 /**
