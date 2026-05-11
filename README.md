@@ -71,7 +71,7 @@ ber_viewer_electron/
 └── src/
     ├── main.js            ← Electron-Hauptprozess, BER-Parser, IPC
     ├── preload.js         ← IPC-Bridge zwischen Main und Renderer
-    ├── renderer.js        ← UI, Tree-Rendering, Edit-Dialog, SMS-Decoder, SIP-Decoder
+    ├── renderer.js        ← UI, Tree-Rendering, Edit-Dialog, SMS-Decoder, SIP-Decoder (inkl. SIP-SMS-Body)
     ├── index.html         ← Toolbar, Suchfeld, Baumansicht
     └── style.css          ← Dark Theme
 ```
@@ -152,6 +152,8 @@ Der Decoder erkennt SIP-Payloads auf zwei Wegen:
 | **Schlüsselfelder** | Von, An, Call-ID, P-Asserted-Identity, IMSI, IMEI, User-Agent, Via |
 | **Alle SIP-Header** | Vollständige Tabelle; wichtige Header (From, To, Call-ID, P-Asserted-Identity, P-Mav-Extension-IMSI/IMEI, P-Called-Party-ID, Contact) grün hervorgehoben |
 | **SDP** | Falls vorhanden: alle SDP-Zeilen (`v=`, `o=`, `c=`, `m=`, `a=` …) mit Typ-Beschriftung |
+| **SMS-Body** | Bei `Content-Type: application/vnd.3gpp.sms` erscheint ein hervorgehobener Bereich mit Button „📱 SMS dekodieren" — öffnet direkt den SMS-PDU-Decoder mit den Body-Bytes |
+| **Sonstiger Body** | Nicht-SDP/Nicht-SMS-Body wird als Text-Block am Ende des Dialogs angezeigt |
 
 ### Kopier-Funktionen
 
@@ -174,6 +176,7 @@ Rechtsklick auf ein `content [4]`-Feld in `sMS-Contents` → **📱 SMS dekodier
 | 8-Bit (Latin-1) | Erweiterter Zeichensatz |
 | UCS-2 | Unicode (Arabisch, Chinesisch …) |
 | Multipart (UDH) | Teil- und Gesamtanzahl werden angezeigt |
+| **SIP-Body SMS** | `application/vnd.3gpp.sms` im SIP-MESSAGE-Body → Button „📱 SMS dekodieren" im SIP-Dialog |
 
 ---
 
@@ -238,6 +241,11 @@ npm start
 ---
 
 ## Changelog
+
+### v1.4.build_50 (2026-05-11)
+- **SIP-SMS-Body-Decoder** — Wenn ein SIP-`MESSAGE` einen Body mit `Content-Type: application/vnd.3gpp.sms` trägt, zeigt der SIP-Dialog jetzt einen hervorgehobenen „📱 SMS dekodieren"-Button. Ein Klick öffnet direkt den bestehenden SMS-PDU-Decoder mit den binären Body-Bytes (Raw-Extraktion aus dem Uint8Array, kein UTF-8-Umweg).
+- **`parseSipMessage` erweitert** — `result.bodyBytes` (Raw-Byte-Array des Bodys), `result.contentType` (normalisiert, ohne Parameter) und `result.contentLen` werden jetzt immer befüllt.
+- **Allgemeine Body-Anzeige** — Nicht-SDP/Nicht-SMS-Bodies (z.B. XML, Plaintext) werden als `<pre>`-Block am Ende des SIP-Dialogs angezeigt.
 
 ### v1.4.build_49 (2026-04-21)
 - **SIP/VoIP-Decoder** — Rechtsklick oder Doppelklick auf SIP-Payloads öffnet einen dedizierten Decode-Dialog mit Request-/Status-Line, allen Headern (wichtige grün hervorgehoben), SDP-Block und ⧉-Kopier-Buttons für jeden Wert.

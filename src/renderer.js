@@ -793,9 +793,26 @@ function parseSipMessage(raw) {
     }
   }
 
-  // Body
+  // Body (text representation)
   const body = lines.slice(i).join('\n').trim();
   result.body = body;
+
+  // Extract raw body bytes directly from the binary input (preserves binary content)
+  // Find \r\n\r\n or \n\n boundary in the raw bytes
+  const rawArr = new Uint8Array(raw);
+  let bodyStart = -1;
+  for (let bi = 0; bi < rawArr.length - 3; bi++) {
+    if (rawArr[bi]===0x0d && rawArr[bi+1]===0x0a && rawArr[bi+2]===0x0d && rawArr[bi+3]===0x0a) {
+      bodyStart = bi + 4; break;
+    }
+  }
+  if (bodyStart === -1) {
+    // Try \n\n fallback
+    for (let bi = 0; bi < rawArr.length - 1; bi++) {
+      if (rawArr[bi]===0x0a && rawArr[bi+1]===0x0a) { bodyStart = bi + 2; break; }
+    }
+  }
+  result.bodyBytes = bodyStart >= 0 ? Array.from(rawArr.slice(bodyStart)) : [];
 
   // Parse SDP if present
   if (body && /^v=0/.test(body)) {
@@ -823,7 +840,9 @@ function parseSipMessage(raw) {
   result.pai       = hdrMap['p-asserted-identity'] || '';
   result.via       = hdrMap['via'] || '';
   result.contact   = hdrMap['contact'] || '';
-  result.userAgent = hdrMap['user-agent'] || '';
+  result.userAgent   = hdrMap['user-agent'] || '';
+  result.contentType = (hdrMap['content-type'] || '').toLowerCase().split(';')[0].trim();
+  result.contentLen  = parseInt(hdrMap['content-length'] || '0', 10) || 0;
 
   return result;
 }
@@ -886,6 +905,25 @@ function showSipDecode(node) {
     }).join('')}
     </table>` : '';
 
+  // Detect SMS-in-SIP body
+  const hasSmsBody = sip.bodyBytes && sip.bodyBytes.length > 0 &&
+    /vnd\.3gpp\.sms|3gpp.*sms/.test(sip.contentType);
+
+  // Body section HTML (show plain text body if not SDP and not empty)
+  const bodyHtml = (!hasSmsBody && sip.body && !sip.sdp.length) ? `
+    <div style="margin-top:10px;font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Body</div>
+    <pre style="background:var(--bg-alt);border-radius:4px;padding:8px;font-size:10px;color:var(--text);white-space:pre-wrap;word-break:break-all;max-height:120px;overflow-y:auto;margin:4px 0 0 0">${sip.body.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>` : '';
+
+  const smsBodySection = hasSmsBody ? `
+    <div style="margin-top:10px;background:var(--bg-alt);border-radius:4px;padding:8px 10px;display:flex;align-items:center;gap:10px">
+      <span style="font-size:18px">📱</span>
+      <div style="flex:1">
+        <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">SIP Body — ${sip.contentType || 'SMS'}</div>
+        <div style="font-size:12px;color:var(--green);margin-top:2px">${sip.contentLen || sip.bodyBytes.length} Bytes — 3GPP SMS-PDU</div>
+      </div>
+      <button id="sip-sms-body-btn" style="white-space:nowrap">📱 SMS dekodieren</button>
+    </div>` : '';
+
   const dlg = document.createElement('div');
   dlg.id = 'edit-dialog';
   dlg.innerHTML = `
@@ -917,6 +955,8 @@ function showSipDecode(node) {
       </table>
 
       ${sdpHtml}
+      ${bodyHtml}
+      ${smsBodySection}
 
       <div id="edit-buttons" style="margin-top:14px;flex-wrap:wrap;gap:6px">
         <button id="sip-close-btn">Schließen</button>
@@ -928,6 +968,22 @@ function showSipDecode(node) {
     </div>`;
 
   document.body.appendChild(dlg);
+
+  // SMS body button
+  const smsBtnEl = dlg.querySelector('#sip-sms-body-btn');
+  if (smsBtnEl && sip.bodyBytes && sip.bodyBytes.length > 0) {
+    smsBtnEl.onclick = () => {
+      dlg.remove();
+      const syntheticNode = {
+        rawValue: sip.bodyBytes,
+        fieldName: 'sIPContent (Body)',
+        displayValue: '',
+        typeName: 'OCTET STRING',
+        cls: 0, tag: 4
+      };
+      showSmsDecode(syntheticNode);
+    };
+  }
 
   // Inline copy buttons (⧉)
   dlg.querySelectorAll('.sip-copy-btn').forEach(btn => {
