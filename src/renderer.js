@@ -561,28 +561,49 @@ function decodeGsm7(data, numSeptets, shift) {
   return result;
 }
 
-function decodeSmsPdu(rawBytes, opts) {
-  // opts.noSmsc = true → skip SMSC auto-detection (SIP body has no SMSC prefix)
+// Returns confidence score 0-10: how likely is raw[pos] a valid TPDU start?
+function smsTpduScore(raw, pos) {
+  if (pos >= raw.length) return 0;
+  const tp = raw[pos];
+  const mti = tp & 3;
+  if (mti === 3) return 0;
+  try {
+    let p = pos + 1;
+    if (mti === 1) { if (p >= raw.length) return 0; p++; } // skip MR for SUBMIT
+    if (p >= raw.length) return 0;
+    const addrLen = raw[p++];
+    if (addrLen > 20) return 0;
+    if (p >= raw.length) return 0;
+    const addrTon = raw[p];
+    const KNOWN_TON = new Set([0x00, 0x01, 0x11, 0x81, 0x91, 0xa1, 0xd0]);
+    let score = 4;
+    if (KNOWN_TON.has(addrTon)) score += 3;
+    if (addrLen >= 4 && addrLen <= 15) score += 2;
+    if (addrLen === 0) score += 1;
+    return score;
+  } catch(e) { return 0; }
+}
+
+function decodeSmsPdu(rawBytes) {
   const raw = rawBytes;
   let pos = 0;
   const result = {};
   const errors = [];
 
   try {
-    // Detect SMSC prefix: only skip it if second byte looks like a valid TON/NPI
-    // (common values: 0x91=international, 0x81=national, 0xa1, 0x11, 0x01)
-    // Avoids misinterpreting the TP byte as SMSC length
-    if (!opts?.noSmsc) {
-      const VALID_TON_NPI = new Set([0x91, 0x81, 0xa1, 0x11, 0x01, 0xd0]);
-      const smscLen = raw[0];
-      if (smscLen > 0 && smscLen <= 12 && raw.length > smscLen + 1 && VALID_TON_NPI.has(raw[1])) {
-        const smscTon = raw[1];
-        const smscBcd = raw.slice(2, 1 + smscLen);
-        const smscDigits = decodeBcdGsm(smscBcd, smscBcd.length * 2);
-        const smscIntl = ((smscTon >> 4) & 0x7) === 1 ? '+' : '';
-        result.smsc = smscIntl + smscDigits.replace(/f/gi, '');
-        pos = 1 + smscLen;
-      }
+    // Auto-detect SMSC prefix by scoring both interpretations
+    const smscCandLen = raw[0];
+    const posAfterSmsc = 1 + smscCandLen;
+    const scoreWith    = (smscCandLen > 0 && smscCandLen <= 12 && posAfterSmsc < raw.length)
+                         ? smsTpduScore(raw, posAfterSmsc) : 0;
+    const scoreWithout = smsTpduScore(raw, 0);
+    if (scoreWith > scoreWithout) {
+      const smscTon = raw[1];
+      const smscBcd = raw.slice(2, 1 + smscCandLen);
+      const smscDigits = decodeBcdGsm(smscBcd, smscBcd.length * 2);
+      const smscIntl = ((smscTon >> 4) & 0x7) === 1 ? '+' : '';
+      result.smsc = smscIntl + smscDigits.replace(/f/gi, '');
+      pos = posAfterSmsc;
     }
 
     if (pos >= raw.length) throw new Error('Too short after SMSC');
@@ -701,7 +722,7 @@ function decodeSmsPdu(rawBytes, opts) {
 
 function showSmsDecode(node) {
   const raw = node.rawValue || [];
-  const decoded = decodeSmsPdu(raw, node.smsOpts);
+  const decoded = decodeSmsPdu(raw);
 
   const existing = document.getElementById('edit-dialog');
   if (existing) existing.remove();
