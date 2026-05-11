@@ -759,9 +759,11 @@ function showSmsDecode(node) {
         ${tableHtml}
       </table>
       <div style="margin-top:8px;background:var(--bg-alt);border-radius:4px;padding:10px;font-size:13px;color:var(--green);word-break:break-all;white-space:pre-wrap">${decoded.text ?? '(kein Text)'}</div>
+      <div style="margin-top:8px;font-size:10px;color:var(--text-muted);font-family:monospace">PDU: ${Array.from(raw.slice(0,24)).map(b=>b.toString(16).padStart(2,'0')).join(' ')}${raw.length>24?" …":""}</div>
       <div id="edit-buttons" style="margin-top:12px">
         <button id="edit-cancel">Schließen</button>
-        <button id="edit-ok" onclick="navigator.clipboard.writeText(${JSON.stringify(decoded.text??'')})">Text kopieren</button>
+        <button id="sms-dl-btn">📥 PDU speichern</button>
+        <button id="edit-ok">Text kopieren</button>
       </div>
     </div>`;
   document.body.appendChild(dlg);
@@ -771,6 +773,14 @@ function showSmsDecode(node) {
     navigator.clipboard.writeText(decoded.text ?? '');
     statusLeft.textContent = 'SMS-Text kopiert';
     dlg.remove();
+  };
+  dlg.querySelector('#sms-dl-btn').onclick = () => {
+    const blob = new Blob([new Uint8Array(raw)], { type: 'application/octet-stream' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = (node.fieldName || 'sms_body').replace(/[^a-z0-9_\-]/gi, '_') + '.bin';
+    a.click();
+    URL.revokeObjectURL(a.href);
   };
 }
 
@@ -1004,7 +1014,6 @@ function showSipDecode(node) {
         displayValue: '',
         typeName: 'OCTET STRING',
         cls: 0, tag: 4,
-        smsOpts: { noSmsc: true }  // SIP body SMS has no SMSC prefix
       };
       showSmsDecode(syntheticNode);
     };
