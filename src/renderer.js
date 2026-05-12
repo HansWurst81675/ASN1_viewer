@@ -670,8 +670,8 @@ function decodeSmsPdu(rawBytes) {
     const dcs = raw[pos++];
     const cg = (dcs >> 4) & 0xf;
     let alpha = 0;
-    if (cg < 4) alpha = (dcs >> 2) & 0x03;
-    else if (cg === 0xf) alpha = (dcs >> 2) & 1;
+    if (cg < 4) alpha = dcs & 0x03;           // bits 1-0: 00=GSM7, 01=8-bit, 10=UCS2
+    else if (cg === 0xf) alpha = (dcs >> 2) & 1; // bit 2: 0=GSM7, 1=8-bit
     result.dcs = `0x${dcs.toString(16).padStart(2,'0')} (${['GSM7','8-bit','UCS2','reserved'][alpha]})`;
 
     // SMS-DELIVER has SCTS, SMS-SUBMIT has TP-VP (validity period)
@@ -846,7 +846,20 @@ function parseSipMessage(raw) {
       if (rawArr[bi]===0x0a && rawArr[bi+1]===0x0a) { bodyStart = bi + 2; break; }
     }
   }
-  result.bodyBytes = bodyStart >= 0 ? Array.from(rawArr.slice(bodyStart)) : [];
+  // Strip inner MIME sub-header if present (e.g. "sms\r\nContent-Length: 55\r\n\r\n[PDU]")
+  let bodyRaw = bodyStart >= 0 ? rawArr.slice(bodyStart) : new Uint8Array(0);
+  if (bodyRaw.length > 4) {
+    let innerSep = -1;
+    for (let bi = 0; bi < Math.min(bodyRaw.length - 3, 256); bi++) {
+      if (bodyRaw[bi]===0x0d && bodyRaw[bi+1]===0x0a && bodyRaw[bi+2]===0x0d && bodyRaw[bi+3]===0x0a) {
+        const prefix = bodyRaw.slice(0, bi);
+        const isTextPrefix = prefix.every(b => b >= 0x09 && b <= 0x7e);
+        if (isTextPrefix && bi > 0) { innerSep = bi + 4; break; }
+      }
+    }
+    if (innerSep > 0) bodyRaw = bodyRaw.slice(innerSep);
+  }
+  result.bodyBytes = Array.from(bodyRaw);
 
   // Parse SDP if present
   if (body && /^v=0/.test(body)) {
