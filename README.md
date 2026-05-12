@@ -244,11 +244,15 @@ npm start
 
 ## Changelog
 
-### v1.4.build_51 (2026-05-11)
-- **SMS-SMSC-Scoring** — SMSC-Präfix-Erkennung komplett überarbeitet: Scoring-Heuristik testet beide Varianten (mit/ohne SMSC-Skip) und wählt die validere (Kriterien: MTI gültig, addrLen ≤ 20, bekannter addrTon). Behebt Fehldecodierungen bei SIP-Body-SMS mit SMSC-Präfix (`DCS=0x04 (8-bit)` statt korrektem GSM7).
-- **📥 PDU speichern** — neuer Download-Button im SMS-Dialog speichert Roh-PDU-Bytes als `.bin`.
+### v1.4.build_53 (2026-05-12)
+- **RP-DATA Wrapper-Erkennung** — SMS-PDUs im SIP-Body sind per 3GPP TS 24.011 in einem RP-DATA-Frame gekapselt (RP-MTI → RP-MR → RP-OA → RP-DA → RP-UD → TPDU). Der Decoder erkennt das automatisch und schneidet das TPDU heraus.
+- **Alphanumerischer Absender** — TON=5 (0xd0): Adresse ist GSM7-gepackt, Zeichenanzahl = `floor(addrLen × 4 / 7)`. Vorher: BCD-Müll, jetzt z.B. `TINDER`.
+- **DCS-Alpha-Fix** — Alphabet-Bits sind Bits 1–0 (`dcs & 0x03`), nicht Bits 3–2 (`(dcs>>2)&0x03`). DCS=0x04 wird jetzt korrekt als GSM7 erkannt.
+- **Inner-MIME-Header-Strip** — SIP-Body enthält vor der PDU oft `sms\r\nContent-Length: N\r\n\r\n`. Wird jetzt automatisch abgeschnitten.
+- **SMSC-Scoring** — SMSC-Präfix-Erkennung per Heuristik: beide Varianten (mit/ohne Skip) werden bewertet, die plausiblere gewinnt.
+- **📥 PDU speichern** — Download-Button im SMS-Dialog speichert Roh-PDU als `.bin`.
 - **PDU Hex-Dump** — erste 24 Bytes der PDU werden im SMS-Dialog zur Diagnose angezeigt.
-- **Code-Cleanup** — totes `smsOpts`/`noSmsc`-Flag entfernt.
+- **SIP-SMS-Body-Decoder** — `Content-Type: application/vnd.3gpp.sms` im SIP-Dialog → Button „📱 SMS dekodieren".
 
 ### v1.4.build_49 (2026-04-21)
 - **SIP/VoIP-Decoder** — Rechtsklick oder Doppelklick auf SIP-Payloads öffnet einen dedizierten Decode-Dialog mit Request-/Status-Line, allen Headern (wichtige grün hervorgehoben), SDP-Block und ⧉-Kopier-Buttons für jeden Wert.
