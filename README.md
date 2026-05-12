@@ -163,7 +163,11 @@ Der Decoder erkennt SIP-Payloads auf zwei Wegen:
 
 ## SMS-Decoder
 
-Rechtsklick auf ein `content [4]`-Feld in `sMS-Contents` → **📱 SMS dekodieren**.
+Rechtsklick auf ein `content [4]`-Feld in `sMS-Contents` → **📱 SMS dekodieren**. Auch über den SIP-Dialog erreichbar wenn `Content-Type: application/vnd.3gpp.sms`.
+
+**Dialog-Funktionen:** Tabelle mit Typ, Absender/Empfänger, Zeitstempel, PID, DCS, Text; roher PDU-Hex-Dump (erste 24 Bytes) zur Diagnose; **📥 PDU speichern** lädt die Roh-Bytes als `.bin` herunter; **Text kopieren** legt den dekodierten SMS-Text in die Zwischenablage.
+
+**SMSC-Erkennung:** Scoring-Heuristik testet beide Varianten (mit/ohne SMSC-Präfix) und wählt die plausiblere — funktioniert für direkte BER-Knoten und für SIP-Body-SMS mit oder ohne SMSC-Präfix.
 
 | Typ | Unterstützung |
 |---|---|
@@ -174,6 +178,7 @@ Rechtsklick auf ein `content [4]`-Feld in `sMS-Contents` → **📱 SMS dekodier
 | 8-Bit (Latin-1) | Erweiterter Zeichensatz |
 | UCS-2 | Unicode (Arabisch, Chinesisch …) |
 | Multipart (UDH) | Teil- und Gesamtanzahl werden angezeigt |
+| **SIP-Body SMS** | `application/vnd.3gpp.sms` im SIP-`MESSAGE`-Body → Button „📱 SMS dekodieren" im SIP-Dialog; SMSC-Präfix automatisch per Scoring erkannt |
 
 ---
 
@@ -238,6 +243,16 @@ npm start
 ---
 
 ## Changelog
+
+### v1.4.build_53 (2026-05-12)
+- **RP-DATA Wrapper-Erkennung** — SMS-PDUs im SIP-Body sind per 3GPP TS 24.011 in einem RP-DATA-Frame gekapselt (RP-MTI → RP-MR → RP-OA → RP-DA → RP-UD → TPDU). Der Decoder erkennt das automatisch und schneidet das TPDU heraus.
+- **Alphanumerischer Absender** — TON=5 (0xd0): Adresse ist GSM7-gepackt, Zeichenanzahl = `floor(addrLen × 4 / 7)`. Vorher: BCD-Müll, jetzt z.B. `TINDER`.
+- **DCS-Alpha-Fix** — Alphabet-Bits sind Bits 1–0 (`dcs & 0x03`), nicht Bits 3–2 (`(dcs>>2)&0x03`). DCS=0x04 wird jetzt korrekt als GSM7 erkannt.
+- **Inner-MIME-Header-Strip** — SIP-Body enthält vor der PDU oft `sms\r\nContent-Length: N\r\n\r\n`. Wird jetzt automatisch abgeschnitten.
+- **SMSC-Scoring** — SMSC-Präfix-Erkennung per Heuristik: beide Varianten (mit/ohne Skip) werden bewertet, die plausiblere gewinnt.
+- **📥 PDU speichern** — Download-Button im SMS-Dialog speichert Roh-PDU als `.bin`.
+- **PDU Hex-Dump** — erste 24 Bytes der PDU werden im SMS-Dialog zur Diagnose angezeigt.
+- **SIP-SMS-Body-Decoder** — `Content-Type: application/vnd.3gpp.sms` im SIP-Dialog → Button „📱 SMS dekodieren".
 
 ### v1.4.build_49 (2026-04-21)
 - **SIP/VoIP-Decoder** — Rechtsklick oder Doppelklick auf SIP-Payloads öffnet einen dedizierten Decode-Dialog mit Request-/Status-Line, allen Headern (wichtige grün hervorgehoben), SDP-Block und ⧉-Kopier-Buttons für jeden Wert.

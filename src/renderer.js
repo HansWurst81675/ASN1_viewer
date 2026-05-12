@@ -561,25 +561,75 @@ function decodeGsm7(data, numSeptets, shift) {
   return result;
 }
 
+// Returns confidence score 0-10: how likely is raw[pos] a valid TPDU start?
+function smsTpduScore(raw, pos) {
+  if (pos >= raw.length) return 0;
+  const tp = raw[pos];
+  const mti = tp & 3;
+  if (mti === 3) return 0;
+  try {
+    let p = pos + 1;
+    if (mti === 1) { if (p >= raw.length) return 0; p++; } // skip MR for SUBMIT
+    if (p >= raw.length) return 0;
+    const addrLen = raw[p++];
+    if (addrLen > 20) return 0;
+    if (p >= raw.length) return 0;
+    const addrTon = raw[p];
+    const KNOWN_TON = new Set([0x00, 0x01, 0x11, 0x81, 0x91, 0xa1, 0xd0]);
+    let score = 4;
+    if (KNOWN_TON.has(addrTon)) score += 3;
+    if (addrLen >= 4 && addrLen <= 15) score += 2;
+    if (addrLen === 0) score += 1;
+    return score;
+  } catch(e) { return 0; }
+}
+
 function decodeSmsPdu(rawBytes) {
-  const raw = rawBytes;
+  let raw = Array.isArray(rawBytes) ? rawBytes : Array.from(rawBytes);
   let pos = 0;
   const result = {};
   const errors = [];
 
   try {
-    // Detect SMSC prefix: only skip it if second byte looks like a valid TON/NPI
-    // (common values: 0x91=international, 0x81=national, 0xa1, 0x11, 0x01)
-    // Avoids misinterpreting the TP byte as SMSC length
-    const VALID_TON_NPI = new Set([0x91, 0x81, 0xa1, 0x11, 0x01, 0xd0]);
-    const smscLen = raw[0];
-    if (smscLen > 0 && smscLen <= 12 && raw.length > smscLen + 1 && VALID_TON_NPI.has(raw[1])) {
+    // Detect RP-DATA wrapper (3GPP 24.011): byte[0]=RP-MTI, OA-len at [2], DA-len after OA
+    // RP-MTI values: 0=RP-DATA(MS→Net), 1=RP-DATA(Net→MS) — both valid here
+    const rpMti = raw[0] & 0x07;
+    if ((rpMti === 0 || rpMti === 1) && raw.length > 4) {
+      const rpOaLen = raw[2];                         // length of RP-OA content
+      const rpDaPos = 3 + rpOaLen;                    // position of RP-DA-len byte
+      if (rpDaPos + 1 < raw.length) {
+        const rpDaLen = raw[rpDaPos];                 // length of RP-DA content
+        const rpUdPos = rpDaPos + 1 + rpDaLen;        // position of RP-UD-len byte
+        if (rpUdPos + 1 < raw.length) {
+          const rpUdLen = raw[rpUdPos];               // length of TPDU in bytes
+          const tpduStart = rpUdPos + 1;
+          const tpduEnd = tpduStart + rpUdLen;
+          // Validate: TPDU must fit, and TP byte must be valid (mti 0,1,2)
+          if (tpduEnd <= raw.length && rpUdLen > 2) {
+            const tpCand = raw[tpduStart] & 0x03;
+            if (tpCand !== 3) {
+              // Re-enter with just the TPDU bytes (no SMSC prefix in RP-DATA)
+              raw = raw.slice(tpduStart, tpduEnd);
+              pos = 0;
+            }
+          }
+        }
+      }
+    }
+
+    // Auto-detect SMSC prefix by scoring both interpretations
+    const smscCandLen = raw[0];
+    const posAfterSmsc = 1 + smscCandLen;
+    const scoreWith    = (smscCandLen > 0 && smscCandLen <= 12 && posAfterSmsc < raw.length)
+                         ? smsTpduScore(raw, posAfterSmsc) : 0;
+    const scoreWithout = smsTpduScore(raw, 0);
+    if (scoreWith > scoreWithout) {
       const smscTon = raw[1];
-      const smscBcd = raw.slice(2, 1 + smscLen);
+      const smscBcd = raw.slice(2, 1 + smscCandLen);
       const smscDigits = decodeBcdGsm(smscBcd, smscBcd.length * 2);
       const smscIntl = ((smscTon >> 4) & 0x7) === 1 ? '+' : '';
       result.smsc = smscIntl + smscDigits.replace(/f/gi, '');
-      pos = 1 + smscLen;
+      pos = posAfterSmsc;
     }
 
     if (pos >= raw.length) throw new Error('Too short after SMSC');
@@ -637,17 +687,28 @@ function decodeSmsPdu(rawBytes) {
     // SMS-DELIVER / SMS-SUBMIT: address
     const addrLen = raw[pos++];
     const addrTon = raw[pos++];
-    const addrBcd = raw.slice(pos, pos + Math.ceil(addrLen / 2)); pos += Math.ceil(addrLen / 2);
-    const addrIntl = ((addrTon >> 4) & 0x7) === 1 ? '+' : '';
-    result[mti === 1 ? 'to' : 'from'] = addrIntl + decodeBcdGsm(addrBcd, addrLen);
+    const isAlpha = ((addrTon >> 4) & 0x7) === 5; // TON=5 = alphanumeric
+    let addrStr;
+    if (isAlpha) {
+      // Alphanumeric: addrLen=semi-octets, chars = floor(addrLen*4/7), bytes = ceil(addrLen/2)
+      const alphBytes = Math.ceil(addrLen / 2);
+      const alphChars = Math.floor(addrLen * 4 / 7);
+      const alphRaw = raw.slice(pos, pos + alphBytes); pos += alphBytes;
+      addrStr = decodeGsm7(alphRaw, alphChars, 0);
+    } else {
+      const addrBcd = raw.slice(pos, pos + Math.ceil(addrLen / 2)); pos += Math.ceil(addrLen / 2);
+      const addrIntl = ((addrTon >> 4) & 0x7) === 1 ? '+' : '';
+      addrStr = addrIntl + decodeBcdGsm(addrBcd, addrLen);
+    }
+    result[mti === 1 ? 'to' : 'from'] = addrStr;
 
     result.pid = `0x${raw[pos++].toString(16).padStart(2,'0')}`;
 
     const dcs = raw[pos++];
     const cg = (dcs >> 4) & 0xf;
     let alpha = 0;
-    if (cg < 4) alpha = (dcs >> 2) & 0x03;
-    else if (cg === 0xf) alpha = (dcs >> 2) & 1;
+    if (cg < 4) alpha = dcs & 0x03;           // bits 1-0: 00=GSM7, 01=8-bit, 10=UCS2
+    else if (cg === 0xf) alpha = (dcs >> 2) & 1; // bit 2: 0=GSM7, 1=8-bit
     result.dcs = `0x${dcs.toString(16).padStart(2,'0')} (${['GSM7','8-bit','UCS2','reserved'][alpha]})`;
 
     // SMS-DELIVER has SCTS, SMS-SUBMIT has TP-VP (validity period)
@@ -735,9 +796,11 @@ function showSmsDecode(node) {
         ${tableHtml}
       </table>
       <div style="margin-top:8px;background:var(--bg-alt);border-radius:4px;padding:10px;font-size:13px;color:var(--green);word-break:break-all;white-space:pre-wrap">${decoded.text ?? '(kein Text)'}</div>
+      <div style="margin-top:8px;font-size:10px;color:var(--text-muted);font-family:monospace">PDU: ${Array.from(raw.slice(0,24)).map(b=>b.toString(16).padStart(2,'0')).join(' ')}${raw.length>24?" …":""}</div>
       <div id="edit-buttons" style="margin-top:12px">
         <button id="edit-cancel">Schließen</button>
-        <button id="edit-ok" onclick="navigator.clipboard.writeText(${JSON.stringify(decoded.text??'')})">Text kopieren</button>
+        <button id="sms-dl-btn">📥 PDU speichern</button>
+        <button id="edit-ok">Text kopieren</button>
       </div>
     </div>`;
   document.body.appendChild(dlg);
@@ -747,6 +810,14 @@ function showSmsDecode(node) {
     navigator.clipboard.writeText(decoded.text ?? '');
     statusLeft.textContent = 'SMS-Text kopiert';
     dlg.remove();
+  };
+  dlg.querySelector('#sms-dl-btn').onclick = () => {
+    const blob = new Blob([new Uint8Array(raw)], { type: 'application/octet-stream' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = (node.fieldName || 'sms_body').replace(/[^a-z0-9_\-]/gi, '_') + '.bin';
+    a.click();
+    URL.revokeObjectURL(a.href);
   };
 }
 
@@ -793,9 +864,39 @@ function parseSipMessage(raw) {
     }
   }
 
-  // Body
+  // Body (text representation)
   const body = lines.slice(i).join('\n').trim();
   result.body = body;
+
+  // Extract raw body bytes directly from the binary input (preserves binary content)
+  // Find \r\n\r\n or \n\n boundary in the raw bytes
+  const rawArr = new Uint8Array(raw);
+  let bodyStart = -1;
+  for (let bi = 0; bi < rawArr.length - 3; bi++) {
+    if (rawArr[bi]===0x0d && rawArr[bi+1]===0x0a && rawArr[bi+2]===0x0d && rawArr[bi+3]===0x0a) {
+      bodyStart = bi + 4; break;
+    }
+  }
+  if (bodyStart === -1) {
+    // Try \n\n fallback
+    for (let bi = 0; bi < rawArr.length - 1; bi++) {
+      if (rawArr[bi]===0x0a && rawArr[bi+1]===0x0a) { bodyStart = bi + 2; break; }
+    }
+  }
+  // Strip inner MIME sub-header if present (e.g. "sms\r\nContent-Length: 55\r\n\r\n[PDU]")
+  let bodyRaw = bodyStart >= 0 ? rawArr.slice(bodyStart) : new Uint8Array(0);
+  if (bodyRaw.length > 4) {
+    let innerSep = -1;
+    for (let bi = 0; bi < Math.min(bodyRaw.length - 3, 256); bi++) {
+      if (bodyRaw[bi]===0x0d && bodyRaw[bi+1]===0x0a && bodyRaw[bi+2]===0x0d && bodyRaw[bi+3]===0x0a) {
+        const prefix = bodyRaw.slice(0, bi);
+        const isTextPrefix = prefix.every(b => b >= 0x09 && b <= 0x7e);
+        if (isTextPrefix && bi > 0) { innerSep = bi + 4; break; }
+      }
+    }
+    if (innerSep > 0) bodyRaw = bodyRaw.slice(innerSep);
+  }
+  result.bodyBytes = Array.from(bodyRaw);
 
   // Parse SDP if present
   if (body && /^v=0/.test(body)) {
@@ -823,7 +924,9 @@ function parseSipMessage(raw) {
   result.pai       = hdrMap['p-asserted-identity'] || '';
   result.via       = hdrMap['via'] || '';
   result.contact   = hdrMap['contact'] || '';
-  result.userAgent = hdrMap['user-agent'] || '';
+  result.userAgent   = hdrMap['user-agent'] || '';
+  result.contentType = (hdrMap['content-type'] || '').toLowerCase().split(';')[0].trim();
+  result.contentLen  = parseInt(hdrMap['content-length'] || '0', 10) || 0;
 
   return result;
 }
@@ -886,6 +989,25 @@ function showSipDecode(node) {
     }).join('')}
     </table>` : '';
 
+  // Detect SMS-in-SIP body
+  const hasSmsBody = sip.bodyBytes && sip.bodyBytes.length > 0 &&
+    /vnd\.3gpp\.sms|3gpp.*sms/.test(sip.contentType);
+
+  // Body section HTML (show plain text body if not SDP and not empty)
+  const bodyHtml = (!hasSmsBody && sip.body && !sip.sdp.length) ? `
+    <div style="margin-top:10px;font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">Body</div>
+    <pre style="background:var(--bg-alt);border-radius:4px;padding:8px;font-size:10px;color:var(--text);white-space:pre-wrap;word-break:break-all;max-height:120px;overflow-y:auto;margin:4px 0 0 0">${sip.body.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>` : '';
+
+  const smsBodySection = hasSmsBody ? `
+    <div style="margin-top:10px;background:var(--bg-alt);border-radius:4px;padding:8px 10px;display:flex;align-items:center;gap:10px">
+      <span style="font-size:18px">📱</span>
+      <div style="flex:1">
+        <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">SIP Body — ${sip.contentType || 'SMS'}</div>
+        <div style="font-size:12px;color:var(--green);margin-top:2px">${sip.contentLen || sip.bodyBytes.length} Bytes — 3GPP SMS-PDU</div>
+      </div>
+      <button id="sip-sms-body-btn" style="white-space:nowrap">📱 SMS dekodieren</button>
+    </div>` : '';
+
   const dlg = document.createElement('div');
   dlg.id = 'edit-dialog';
   dlg.innerHTML = `
@@ -917,6 +1039,8 @@ function showSipDecode(node) {
       </table>
 
       ${sdpHtml}
+      ${bodyHtml}
+      ${smsBodySection}
 
       <div id="edit-buttons" style="margin-top:14px;flex-wrap:wrap;gap:6px">
         <button id="sip-close-btn">Schließen</button>
@@ -928,6 +1052,22 @@ function showSipDecode(node) {
     </div>`;
 
   document.body.appendChild(dlg);
+
+  // SMS body button
+  const smsBtnEl = dlg.querySelector('#sip-sms-body-btn');
+  if (smsBtnEl && sip.bodyBytes && sip.bodyBytes.length > 0) {
+    smsBtnEl.onclick = () => {
+      dlg.remove();
+      const syntheticNode = {
+        rawValue: sip.bodyBytes,
+        fieldName: 'sIPContent (Body)',
+        displayValue: '',
+        typeName: 'OCTET STRING',
+        cls: 0, tag: 4,
+      };
+      showSmsDecode(syntheticNode);
+    };
+  }
 
   // Inline copy buttons (⧉)
   dlg.querySelectorAll('.sip-copy-btn').forEach(btn => {
