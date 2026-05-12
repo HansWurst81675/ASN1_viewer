@@ -585,12 +585,38 @@ function smsTpduScore(raw, pos) {
 }
 
 function decodeSmsPdu(rawBytes) {
-  const raw = rawBytes;
+  let raw = Array.isArray(rawBytes) ? rawBytes : Array.from(rawBytes);
   let pos = 0;
   const result = {};
   const errors = [];
 
   try {
+    // Detect RP-DATA wrapper (3GPP 24.011): byte[0]=RP-MTI, OA-len at [2], DA-len after OA
+    // RP-MTI values: 0=RP-DATA(MS→Net), 1=RP-DATA(Net→MS) — both valid here
+    const rpMti = raw[0] & 0x07;
+    if ((rpMti === 0 || rpMti === 1) && raw.length > 4) {
+      const rpOaLen = raw[2];                         // length of RP-OA content
+      const rpDaPos = 3 + rpOaLen;                    // position of RP-DA-len byte
+      if (rpDaPos + 1 < raw.length) {
+        const rpDaLen = raw[rpDaPos];                 // length of RP-DA content
+        const rpUdPos = rpDaPos + 1 + rpDaLen;        // position of RP-UD-len byte
+        if (rpUdPos + 1 < raw.length) {
+          const rpUdLen = raw[rpUdPos];               // length of TPDU in bytes
+          const tpduStart = rpUdPos + 1;
+          const tpduEnd = tpduStart + rpUdLen;
+          // Validate: TPDU must fit, and TP byte must be valid (mti 0,1,2)
+          if (tpduEnd <= raw.length && rpUdLen > 2) {
+            const tpCand = raw[tpduStart] & 0x03;
+            if (tpCand !== 3) {
+              // Re-enter with just the TPDU bytes (no SMSC prefix in RP-DATA)
+              raw = raw.slice(tpduStart, tpduEnd);
+              pos = 0;
+            }
+          }
+        }
+      }
+    }
+
     // Auto-detect SMSC prefix by scoring both interpretations
     const smscCandLen = raw[0];
     const posAfterSmsc = 1 + smscCandLen;
@@ -661,9 +687,20 @@ function decodeSmsPdu(rawBytes) {
     // SMS-DELIVER / SMS-SUBMIT: address
     const addrLen = raw[pos++];
     const addrTon = raw[pos++];
-    const addrBcd = raw.slice(pos, pos + Math.ceil(addrLen / 2)); pos += Math.ceil(addrLen / 2);
-    const addrIntl = ((addrTon >> 4) & 0x7) === 1 ? '+' : '';
-    result[mti === 1 ? 'to' : 'from'] = addrIntl + decodeBcdGsm(addrBcd, addrLen);
+    const isAlpha = ((addrTon >> 4) & 0x7) === 5; // TON=5 = alphanumeric
+    let addrStr;
+    if (isAlpha) {
+      // Alphanumeric: addrLen=semi-octets, chars = floor(addrLen*4/7), bytes = ceil(addrLen/2)
+      const alphBytes = Math.ceil(addrLen / 2);
+      const alphChars = Math.floor(addrLen * 4 / 7);
+      const alphRaw = raw.slice(pos, pos + alphBytes); pos += alphBytes;
+      addrStr = decodeGsm7(alphRaw, alphChars, 0);
+    } else {
+      const addrBcd = raw.slice(pos, pos + Math.ceil(addrLen / 2)); pos += Math.ceil(addrLen / 2);
+      const addrIntl = ((addrTon >> 4) & 0x7) === 1 ? '+' : '';
+      addrStr = addrIntl + decodeBcdGsm(addrBcd, addrLen);
+    }
+    result[mti === 1 ? 'to' : 'from'] = addrStr;
 
     result.pid = `0x${raw[pos++].toString(16).padStart(2,'0')}`;
 
