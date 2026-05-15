@@ -244,6 +244,10 @@ npm start
 
 ## Changelog
 
+### v1.4.build_56 (2026-05-15)
+- **BOOLEAN OPTIONAL korrekt** — Da `sMSContentRemovedIndicator [5] BOOLEAN OPTIONAL` semantisch nur als vorhanden (TRUE) oder fehlend kodiert werden kann, zeigt der Edit-Dialog jetzt zwei Optionen: **TRUE** (Wert bleibt `85 01 FF`) oder **Entfernen** (Tag wird beim Speichern vollständig aus dem BER-Stream gelöscht). `FALSE` existiert in diesem Kontext nicht. Die entfernte Zeile wird im Baum durchgestrichen und mit `⟨entfernt⟩` markiert.
+- **`_deleted`-Flag im Serialisierer** — `serializeNode()` in `main.js` überspringt Knoten mit `_deleted=true`; gilt allgemein für alle zukünftig als OPTIONAL markierten Felder.
+
 ### v1.4.build_55 (2026-05-15)
 - **BOOLEAN-Editierung** — Doppelklick auf ein BOOLEAN-Feld (`sMSContentRemovedIndicator` u.a.) öffnet jetzt ein TRUE/FALSE-Dropdown statt eines Freitextfelds. Vorher wurde z.B. "FALSE" als UTF-8-Bytes `46 41 4c 53 45` gespeichert; jetzt wird korrekt `0xff` (TRUE) bzw. `0x00` (FALSE) serialisiert. Betrifft alle BOOLEAN-Knoten (universal tag=1 und context-tagged mit `origChildType=BOOLEAN`). `recomputeDisplayValue()` gibt nach dem Edit ebenfalls `TRUE`/`FALSE` zurück.
 

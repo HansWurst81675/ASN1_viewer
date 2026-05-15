@@ -916,6 +916,7 @@ function encodeLength(len) {
 }
 
 function serializeNode(node) {
+  if (node._deleted) return Buffer.alloc(0);  // OPTIONAL node marked for removal
   // Rebuild tag byte(s)
   let tagByte;
   if(node.tag<=30){
@@ -935,7 +936,7 @@ function serializeNode(node) {
 }
 
 function serializeNodes(nodes) {
-  return Buffer.concat(nodes.map(serializeNode));
+  return Buffer.concat(nodes.filter(n => !n._deleted).map(serializeNode));
 }
 
 // ── TXT export (li_decoder-style indented output) ─────────────────────────────

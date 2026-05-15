@@ -414,6 +414,7 @@ function encodeLength(len) {
   return [0x80|arr.length,...arr];
 }
 function serializeNode(node) {
+  if (node._deleted) return [];  // OPTIONAL node marked for removal — emit nothing
   let tagBytes;
   if(node.tag<=30){
     tagBytes=[(node.cls<<6)|(node.cons<<5)|node.tag];
@@ -431,7 +432,7 @@ function serializeNode(node) {
   return [...tagBytes,...encodeLength(valueBytes.length),...valueBytes];
 }
 function serializeNodes(nodes) {
-  return new Uint8Array(nodes.flatMap(serializeNode));
+  return new Uint8Array(nodes.filter(n => !n._deleted).flatMap(serializeNode));
 }
 
 // ── Context menu ──────────────────────────────────────────────────────────────
@@ -1114,7 +1115,7 @@ function openEditDialog(node, row) {
   const existing = document.getElementById('edit-dialog');
   if(existing) existing.remove();
 
-  // ── BOOLEAN: show a simple TRUE/FALSE dropdown ──────────────────────────────
+  // ── BOOLEAN: show a TRUE / Remove dropdown ──────────────────────────────────
   if (isBooleanNode(node)) {
     const currentTrue = node.rawValue && node.rawValue[0] !== 0;
     const dlg = document.createElement('div');
@@ -1123,12 +1124,15 @@ function openEditDialog(node, row) {
       <div id="edit-overlay"></div>
       <div id="edit-box">
         <div id="edit-title">${node.fieldName||node.tagLabel}
-          <span id="edit-type">BOOLEAN</span>
+          <span id="edit-type">BOOLEAN OPTIONAL</span>
         </div>
-        <div id="edit-hint">Select TRUE or FALSE</div>
+        <div id="edit-hint">
+          Dieses Feld ist <b>OPTIONAL</b>: Es existiert nur wenn TRUE.<br>
+          „Entfernen" löscht den Tag vollständig aus dem Stream.
+        </div>
         <select id="edit-bool-select" style="width:100%;padding:6px 8px;margin:8px 0;font-size:14px;background:var(--bg2);color:var(--fg);border:1px solid var(--border);border-radius:4px;">
-          <option value="true"  ${currentTrue  ? 'selected' : ''}>TRUE</option>
-          <option value="false" ${!currentTrue ? 'selected' : ''}>FALSE</option>
+          <option value="true"   ${currentTrue  ? 'selected' : ''}>TRUE  (85 01 FF)</option>
+          <option value="remove" ${!currentTrue ? 'selected' : ''}>Entfernen — OPTIONAL, Tag wird gelöscht</option>
         </select>
         <div id="edit-buttons">
           <button id="edit-cancel">Cancel</button>
@@ -1143,17 +1147,34 @@ function openEditDialog(node, row) {
     dlg.querySelector('#edit-cancel').onclick = () => dlg.remove();
     dlg.querySelector('#edit-overlay').onclick = () => dlg.remove();
     dlg.querySelector('#edit-ok').onclick = () => {
-      const raw = sel.value === 'true' ? [0xff] : [0x00];
-      node.rawValue = raw;
-      node.displayValue = recomputeDisplayValue(node);
-      node._modified = true;
-      hasChanges = true;
-      updateTitle();
-      const valCell = row.querySelector('.col-value');
-      if (valCell) { valCell.textContent = node.displayValue; valCell.style.color = 'var(--orange)'; }
-      row.classList.add('modified');
+      if (sel.value === 'remove') {
+        // Mark node as deleted — serializeNode will skip it
+        node._deleted = true;
+        node._modified = true;
+        hasChanges = true;
+        updateTitle();
+        // Strike-through the row to show it's been removed
+        row.style.opacity = '0.35';
+        row.style.textDecoration = 'line-through';
+        row.classList.add('modified');
+        const valCell = row.querySelector('.col-value');
+        if (valCell) { valCell.textContent = '⟨entfernt⟩'; valCell.style.color = 'var(--orange)'; }
+        statusLeft.textContent = `Removed: ${node.fieldName||node.tagLabel}`;
+      } else {
+        node.rawValue = [0xff];
+        node._deleted = false;
+        node.displayValue = 'TRUE';
+        node._modified = true;
+        hasChanges = true;
+        updateTitle();
+        row.style.opacity = '';
+        row.style.textDecoration = '';
+        row.classList.add('modified');
+        const valCell = row.querySelector('.col-value');
+        if (valCell) { valCell.textContent = 'TRUE'; valCell.style.color = 'var(--orange)'; }
+        statusLeft.textContent = `Modified: ${node.fieldName||node.tagLabel}`;
+      }
       dlg.remove();
-      statusLeft.textContent = `Modified: ${node.fieldName||node.tagLabel}`;
     };
     sel.addEventListener('keydown', e => {
       if (e.key === 'Enter') dlg.querySelector('#edit-ok').click();
