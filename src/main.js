@@ -130,7 +130,7 @@ function buildTagMaps(asn1Dir) {
   };
   maps['UmtsPartyIdentity'] = {
     1:['imei','OCTET'], 2:['tei','OCTET'], 3:['imsi','OCTET'],
-    4:['callingPartyNumber','OCTET'], 5:['calledPartyNumber','OCTET'],
+    4:['callingPartyNumber','CallingPartyNumber'], 5:['calledPartyNumber','CalledPartyNumber'],
     6:['msISDN','OCTET'], 7:['e164-Format','OCTET'], 8:['sip-uri','OCTET'],
   };
 
@@ -144,11 +144,12 @@ function buildTagMaps(asn1Dir) {
   };
 
   maps['SmsContents'] = {
-    1:['initiator',       'ENUMERATED'],
-    2:['transfer-status', 'ENUMERATED'],
-    3:['other-message',   'ENUMERATED'],
-    4:['content',         'OCTET'],
-    5:['national-SM-Content', 'OCTET'],
+    1:['initiator',                    'ENUMERATED'],
+    2:['transfer-status',              'ENUMERATED'],
+    3:['other-message',                'ENUMERATED'],
+    4:['content',                      'OCTET'],
+    5:['sMSContentRemovedIndicator',   'BOOLEAN'],  // new field: TRUE = content withheld by LEA policy
+    6:['national-SM-Content',          'OCTET'],    // was [5] in older specs; shifted by new field above
   };
 
   // IPMultimediaPDU Location (from LI-PS-PDU, not TS33128)
@@ -310,13 +311,28 @@ function buildTagMaps(asn1Dir) {
     1: ['imei',                'OCTET'],
     2: ['tei',                 'OCTET'],
     3: ['imsi',                'OCTET'],
-    4: ['callingPartyNumber',  'OCTET'],
-    5: ['calledPartyNumber',   'OCTET'],
+    4: ['callingPartyNumber',  'CallingPartyNumber'],  // CHOICE: iSUP/dSS1/mAP-Format
+    5: ['calledPartyNumber',   'CalledPartyNumber'],   // CHOICE: iSUP/mAP-Format
     6: ['msISDN',              'OCTET'],
     7: ['e164-Format',         'OCTET'],
     8: ['sip-uri',             'OCTET'],
     9: ['tel-url',             'OCTET'],
    10: ['party-Validity',      'OCTET'],
+  };
+
+  // CallingPartyNumber CHOICE (HI2Operations §7 / EN 300 356 / TS 29.002 MAP-Format)
+  // iSUP-Format [1]: TON/NPI byte + BCD digits (ITU-T Q.763)
+  // dSS1-Format [2]: DSS1 value part, also TON/NPI + BCD
+  // mAP-Format  [3]: MAP AddressString, also TON/NPI + BCD (TS 29.002)
+  maps['CallingPartyNumber'] = {
+    1: ['iSUP-Format', 'MSISDN'],
+    2: ['dSS1-Format', 'MSISDN'],
+    3: ['mAP-Format',  'MSISDN'],
+  };
+  maps['CalledPartyNumber'] = {
+    1: ['iSUP-Format', 'MSISDN'],
+    2: ['mAP-Format',  'MSISDN'],
+    3: ['mAP-Format-ext', 'MSISDN'],
   };
 
   // IPMMIRILocation (from LI-PS-PDU, not TS33128)
@@ -498,6 +514,7 @@ function scalarValue(cls, tag, raw, fieldName, origChildType) {
   const enums = getEnumMaps();
 
   if (cls === 0) {
+    if (tag === 1) return raw[0] !== 0 ? 'TRUE' : 'FALSE';  // BOOLEAN
     if (tag === 2) {   // INTEGER
       let v = 0n;
       for (const b of raw) v = (v << 8n) | BigInt(b);
@@ -523,6 +540,11 @@ function scalarValue(cls, tag, raw, fieldName, origChildType) {
     if ([12, 19, 22, 26, 30].includes(tag)) {
       return Buffer.from(raw).toString('utf8');
     }
+  }
+
+  // Context-tagged BOOLEAN (e.g. sMSContentRemovedIndicator)
+  if (cls === 2 && origChildType === 'BOOLEAN') {
+    return raw[0] !== 0 ? 'TRUE' : 'FALSE';
   }
 
   // Context-tagged: ENUMERATED by child type
@@ -556,11 +578,12 @@ function scalarValue(cls, tag, raw, fieldName, origChildType) {
 
   // MSISDN/IMSI/IMEI: BCD decode only if bytes are non-printable (real BCD)
   // TS33128 stores these as plain UTF-8 strings; older formats use BCD
-  if (cls === 2 && raw.length >= 2 && fieldName) {
-    const fn = fieldName;
+  if (cls === 2 && raw.length >= 2) {
+    const fn = fieldName || '';
     const isBcd = raw.some(b => b > 0x7f || (b < 0x20 && b !== 0x09 && b !== 0x0a && b !== 0x0d));
     if (isBcd) {
-      if (/msisdn|mSISDN|msISDN/i.test(fn) || /callingParty|calledParty/i.test(fn)) {
+      // origChildType 'MSISDN' is a virtual pseudo-type used by CallingPartyNumber/CalledPartyNumber CHOICE
+      if (origChildType === 'MSISDN' || /msisdn|mSISDN|msISDN/i.test(fn) || /callingParty|calledParty/i.test(fn)) {
         return decodeBcdMsisdn(Array.from(raw));
       }
       if (/^i[mM][sS][iI]$/.test(fn) || fn === 'iMSI' || fn === 'imsi') {
@@ -820,8 +843,14 @@ function parseBer(buf, baseOffset, typeHint, tagMaps, depth) {
     if(t.cons && !forceScalar){
       node.children=parseBer(raw,baseOffset+l.pos,recurseHint,tagMaps,depth+1);
     } else if(!forceScalar && looksLikeBer(raw)&&depth<8){
-      // Nested BER in OCTET STRING: use childType as hint
-      node.children=parseBer(raw,baseOffset+l.pos,childType,tagMaps,depth+1);
+      // Nested BER in OCTET STRING: use childType as hint.
+      // Exception: phone-number fields (MSISDN, callingPartyNumber, etc.) must never be
+      // recursed into — their bytes are BCD-encoded numbers, not nested BER.
+      const isPhoneField = node.fieldName &&
+        /callingParty|calledParty|msISDN|mSISDN|serviceCenterAddress/i.test(node.fieldName);
+      if (!isPhoneField) {
+        node.children=parseBer(raw,baseOffset+l.pos,childType,tagMaps,depth+1);
+      }
     }
 
     if(!node.children.length){

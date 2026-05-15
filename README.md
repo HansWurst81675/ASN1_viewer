@@ -244,6 +244,11 @@ npm start
 
 ## Changelog
 
+### v1.4.build_54 (2026-05-15)
+- **`sMSContentRemovedIndicator` [5]** — Neues Feld laut aktueller Spec korrekt dekodiert: `TRUE` (0x01) statt bisheriger Fehlanzeige `national-SM-Content 0x01`. `national-SM-Content` wurde auf Tag `[6]` verschoben.
+- **BOOLEAN-Dekodierung** — Universal BOOLEAN (tag=1) sowie context-tagged BOOLEAN (`origChildType=BOOLEAN`) werden jetzt als `TRUE` / `FALSE` angezeigt statt als Hex.
+- **`callingPartyNumber` / `calledPartyNumber` lesbar** — BCD-kodierte Rufnummern (ISUP/dSS1/MAP-Format, erstes Byte = TON/NPI) werden jetzt korrekt als `+49…`-Nummer dargestellt. Ursache des bisherigen Fehlers: `looksLikeBer()` erkannte das TON/NPI-Byte fälschlicherweise als BER-Tag und parste das Feld rekursiv statt es als Telefonnummer zu dekodieren. Fix: Telefonnummer-Felder werden vom BER-Rekurse ausgenommen.
+
 ### v1.4.build_53 (2026-05-12)
 - **RP-DATA Wrapper-Erkennung** — SMS-PDUs im SIP-Body sind per 3GPP TS 24.011 in einem RP-DATA-Frame gekapselt (RP-MTI → RP-MR → RP-OA → RP-DA → RP-UD → TPDU). Der Decoder erkennt das automatisch und schneidet das TPDU heraus.
 - **Alphanumerischer Absender** — TON=5 (0xd0): Adresse ist GSM7-gepackt, Zeichenanzahl = `floor(addrLen × 4 / 7)`. Vorher: BCD-Müll, jetzt z.B. `TINDER`.
