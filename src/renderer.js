@@ -414,6 +414,7 @@ function encodeLength(len) {
   return [0x80|arr.length,...arr];
 }
 function serializeNode(node) {
+  if (node._deleted) return [];  // OPTIONAL node marked for removal — emit nothing
   let tagBytes;
   if(node.tag<=30){
     tagBytes=[(node.cls<<6)|(node.cons<<5)|node.tag];
@@ -431,7 +432,7 @@ function serializeNode(node) {
   return [...tagBytes,...encodeLength(valueBytes.length),...valueBytes];
 }
 function serializeNodes(nodes) {
-  return new Uint8Array(nodes.flatMap(serializeNode));
+  return new Uint8Array(nodes.filter(n => !n._deleted).flatMap(serializeNode));
 }
 
 // ── Context menu ──────────────────────────────────────────────────────────────
