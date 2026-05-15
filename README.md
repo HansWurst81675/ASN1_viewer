@@ -244,6 +244,9 @@ npm start
 
 ## Changelog
 
+### v1.4.build_55 (2026-05-15)
+- **BOOLEAN-Editierung** — Doppelklick auf ein BOOLEAN-Feld (`sMSContentRemovedIndicator` u.a.) öffnet jetzt ein TRUE/FALSE-Dropdown statt eines Freitextfelds. Vorher wurde z.B. "FALSE" als UTF-8-Bytes `46 41 4c 53 45` gespeichert; jetzt wird korrekt `0xff` (TRUE) bzw. `0x00` (FALSE) serialisiert. Betrifft alle BOOLEAN-Knoten (universal tag=1 und context-tagged mit `origChildType=BOOLEAN`). `recomputeDisplayValue()` gibt nach dem Edit ebenfalls `TRUE`/`FALSE` zurück.
+
 ### v1.4.build_54 (2026-05-15)
 - **`sMSContentRemovedIndicator` [5]** — Neues Feld laut aktueller Spec korrekt dekodiert: `TRUE` (0x01) statt bisheriger Fehlanzeige `national-SM-Content 0x01`. `national-SM-Content` wurde auf Tag `[6]` verschoben.
 - **BOOLEAN-Dekodierung** — Universal BOOLEAN (tag=1) sowie context-tagged BOOLEAN (`origChildType=BOOLEAN`) werden jetzt als `TRUE` / `FALSE` angezeigt statt als Hex.

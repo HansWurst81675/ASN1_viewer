@@ -1104,10 +1104,64 @@ function showSipDecode(node) {
 }
 
 // ── Edit dialog ───────────────────────────────────────────────────────────────
+function isBooleanNode(node) {
+  return (node.cls === 0 && node.tag === 1) ||
+         (node.cls === 2 && node.origChildType === 'BOOLEAN');
+}
+
 function openEditDialog(node, row) {
   // Remove any existing dialog
   const existing = document.getElementById('edit-dialog');
   if(existing) existing.remove();
+
+  // ── BOOLEAN: show a simple TRUE/FALSE dropdown ──────────────────────────────
+  if (isBooleanNode(node)) {
+    const currentTrue = node.rawValue && node.rawValue[0] !== 0;
+    const dlg = document.createElement('div');
+    dlg.id = 'edit-dialog';
+    dlg.innerHTML = `
+      <div id="edit-overlay"></div>
+      <div id="edit-box">
+        <div id="edit-title">${node.fieldName||node.tagLabel}
+          <span id="edit-type">BOOLEAN</span>
+        </div>
+        <div id="edit-hint">Select TRUE or FALSE</div>
+        <select id="edit-bool-select" style="width:100%;padding:6px 8px;margin:8px 0;font-size:14px;background:var(--bg2);color:var(--fg);border:1px solid var(--border);border-radius:4px;">
+          <option value="true"  ${currentTrue  ? 'selected' : ''}>TRUE</option>
+          <option value="false" ${!currentTrue ? 'selected' : ''}>FALSE</option>
+        </select>
+        <div id="edit-buttons">
+          <button id="edit-cancel">Cancel</button>
+          <button id="edit-ok">Apply</button>
+        </div>
+        <div id="edit-error"></div>
+      </div>
+    `;
+    document.body.appendChild(dlg);
+    const sel = dlg.querySelector('#edit-bool-select');
+    sel.focus();
+    dlg.querySelector('#edit-cancel').onclick = () => dlg.remove();
+    dlg.querySelector('#edit-overlay').onclick = () => dlg.remove();
+    dlg.querySelector('#edit-ok').onclick = () => {
+      const raw = sel.value === 'true' ? [0xff] : [0x00];
+      node.rawValue = raw;
+      node.displayValue = recomputeDisplayValue(node);
+      node._modified = true;
+      hasChanges = true;
+      updateTitle();
+      const valCell = row.querySelector('.col-value');
+      if (valCell) { valCell.textContent = node.displayValue; valCell.style.color = 'var(--orange)'; }
+      row.classList.add('modified');
+      dlg.remove();
+      statusLeft.textContent = `Modified: ${node.fieldName||node.tagLabel}`;
+    };
+    sel.addEventListener('keydown', e => {
+      if (e.key === 'Enter') dlg.querySelector('#edit-ok').click();
+      if (e.key === 'Escape') dlg.remove();
+    });
+    return;
+  }
+  // ── End BOOLEAN ─────────────────────────────────────────────────────────────
 
   const isHex = node.rawValue && !isTextPrimitive(node) && !isUnixTimestampNode(node);
   const isGenTime = (node.cls === 0 && (node.tag === 24 || node.tag === 23)) ||
@@ -1340,6 +1394,11 @@ function decodeGeneralizedTimeRenderer(s) {
 function recomputeDisplayValue(node) {
   const raw = node.rawValue || [];
   const buf = new Uint8Array(raw);
+  // BOOLEAN (universal tag=1, or context-tagged with origChildType BOOLEAN)
+  if ((node.cls === 0 && node.tag === 1) ||
+      (node.cls === 2 && node.origChildType === 'BOOLEAN')) {
+    return raw[0] !== 0 ? 'TRUE' : 'FALSE';
+  }
   if(node.cls===0){
     if(node.tag===2){ // INTEGER
       let v=0n; for(const b of buf)v=(v<<8n)|BigInt(b);
