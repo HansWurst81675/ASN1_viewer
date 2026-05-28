@@ -10,6 +10,7 @@ let currentNodes  = [];       // top-level parsed nodes (for save/export)
 let currentFile   = null;     // current file path
 let hasChanges    = false;
 let currentHexDump = null;    // hex dump lines for hex viewer
+let rendererEnumMaps = {};    // enum label tables fetched from main process
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const dropOverlay  = document.getElementById('drop-overlay');
@@ -30,6 +31,9 @@ window.berApi.getSchemaInfo().then(info => {
   const verStr  = info.version ? `v${info.version}` : '';
   statusRight.textContent = [verStr, typeStr].filter(Boolean).join('  |  ');
 });
+
+// Load enum label tables once (used for recomputeDisplayValue after edits)
+window.berApi.getEnumMaps().then(maps => { rendererEnumMaps = maps || {}; });
 
 // ── Spec detection from domain OID ────────────────────────────────────────────
 function specFromOid(oid) {
@@ -1184,14 +1188,27 @@ function openEditDialog(node, row) {
   }
   // ── End BOOLEAN ─────────────────────────────────────────────────────────────
 
-  const isHex = node.rawValue && !isTextPrimitive(node) && !isUnixTimestampNode(node);
+  const isEnum = (node.cls === 0 && node.tag === 10) ||
+                 (node.cls === 2 && (node.origChildType === 'ENUMERATED' ||
+                   (node.origChildType && rendererEnumMaps[node.origChildType])));
+  const isInt  = !isEnum && (
+                   (node.cls === 0 && node.tag === 2) ||
+                   (node.cls === 2 && node.origChildType === 'INTEGER' && !isUnixTimestampNode(node)));
+  const isHex  = !isEnum && !isInt && node.rawValue && !isTextPrimitive(node) && !isUnixTimestampNode(node);
   const isGenTime = (node.cls === 0 && (node.tag === 24 || node.tag === 23)) ||
                     (node.cls === 2 && (node.origChildType === 'GeneralizedTime' || node.origChildType === 'UTCTime'));
   const isUnixTs = isUnixTimestampNode(node);
 
-  // For Unix timestamp: strip the "(seconds, 0x…)" suffix so user sees/edits only the date
+  // Build currentVal shown in textarea
   let currentVal;
-  if (isHex) {
+  if (isEnum) {
+    // Show only the numeric value so user can edit it cleanly (strip " ( n, 0xN )" suffix)
+    const numMatch = String(node.displayValue ?? '').match(/\(\s*(\d+)/);
+    currentVal = numMatch ? numMatch[1] : String(node.rawValue?.[0] ?? '0');
+  } else if (isInt) {
+    // Show only the decimal part (strip ", 0xN" suffix)
+    currentVal = String(node.displayValue ?? '').replace(/,\s*0x[0-9a-fA-F]+$/, '').trim();
+  } else if (isHex) {
     currentVal = Array.from(node.rawValue).map(b => b.toString(16).padStart(2,'0')).join(' ');
   } else if (isUnixTs) {
     currentVal = (node.displayValue ?? '').replace(/\s*\(.*\)\s*$/, '').trim();
@@ -1199,7 +1216,16 @@ function openEditDialog(node, row) {
     currentVal = node.displayValue ?? '';
   }
 
-  const hintText = isHex     ? 'Hex bytes (space-separated)'
+  // Build enum label hint if available
+  let enumHint = '';
+  if (isEnum && node.origChildType && rendererEnumMaps[node.origChildType]) {
+    const table = rendererEnumMaps[node.origChildType];
+    enumHint = Object.entries(table).map(([k,v])=>`${k}=${v}`).join('  ');
+  }
+
+  const hintText = isEnum    ? `ENUMERATED — enter number or name${enumHint ? ': ' + enumHint : ''}`
+                 : isInt     ? 'INTEGER — enter decimal or hex (0x…)'
+                 : isHex     ? 'Hex bytes (space-separated)'
                  : isGenTime ? 'Date/Time: YYYY-MM-DD HH:MM:SS[.mmm]Z'
                  : isUnixTs  ? 'Date/Time: YYYY-MM-DD HH:MM:SSZ  (stored as Unix timestamp)'
                  :             'Text value';
@@ -1280,14 +1306,22 @@ function isUnixTimestampNode(node) {
 function isTextPrimitive(node) {
   // UNIVERSAL string/time tags
   if (node.cls === 0 && [12,19,22,26,30,23,24].includes(node.tag)) return true;
-  // Context-tagged INTEGER with known numeric encoding — never treat as text via bytes
+  // UNIVERSAL ENUMERATED — always numeric BER byte, never text
+  if (node.cls === 0 && node.tag === 10) return false;
+  // UNIVERSAL INTEGER — always numeric BER encoding, never text
+  if (node.cls === 0 && node.tag === 2) return false;
+  // Context-tagged INTEGER — numeric encoding
   if (node.cls === 2 && node.origChildType === 'INTEGER') return false;
+  // Context-tagged ENUMERATED — numeric encoding (single BER byte)
+  if (node.cls === 2 && node.origChildType && rendererEnumMaps[node.origChildType]) return false;
+  // Context-tagged ENUMERATED without known enum table — still numeric
+  if (node.cls === 2 && node.origChildType === 'ENUMERATED') return false;
   // Check raw bytes: if all printable ASCII → treat as text
   if (node.rawValue && node.rawValue.length > 0) {
     const allPrintable = node.rawValue.every(b => b >= 0x20 && b <= 0x7e);
     if (allPrintable) return true;
   }
-  // Fallback: displayValue looks like readable text (no leading 0x)
+  // Fallback: displayValue looks like readable text (no leading 0x and not "n, 0xN" numeric form)
   const s = node.displayValue;
   if (typeof s === 'string' && !s.startsWith('0x') && !/^\d+,\s+0x/.test(s)) return true;
   return false;
@@ -1307,6 +1341,61 @@ function applyEdit(node, inputVal, isHex, errDiv, _constraintWarned=false, setWa
     return bytes;
   }
 
+  // ENUMERATED or context-tagged ENUMERATED: user enters a number or label name
+  const isEnum = (node.cls === 0 && node.tag === 10) ||
+                 (node.cls === 2 && (node.origChildType === 'ENUMERATED' ||
+                   (node.origChildType && rendererEnumMaps[node.origChildType])));
+  if (isEnum) {
+    // Accept numeric input directly
+    const numMatch = inputVal.trim().match(/^(\d+)$/);
+    if (numMatch) {
+      const v = parseInt(numMatch[1], 10);
+      if (v < 0 || v > 127) { errDiv.textContent = 'ENUMERATED value must be 0–127'; return null; }
+      return [v];
+    }
+    // Accept label name — look up in enum table
+    const enumTable = node.origChildType ? rendererEnumMaps[node.origChildType] : null;
+    if (enumTable) {
+      const lowerInput = inputVal.trim().toLowerCase();
+      for (const [numStr, label] of Object.entries(enumTable)) {
+        if (label.toLowerCase() === lowerInput) return [parseInt(numStr, 10)];
+      }
+    }
+    errDiv.textContent = 'Enter a number (e.g. 1) or a label name (e.g. activation)';
+    return null;
+  }
+
+  // UNIVERSAL INTEGER: user enters a decimal or hex number
+  const isUniversalInt = (node.cls === 0 && node.tag === 2);
+  const isCtxInt = (node.cls === 2 && node.origChildType === 'INTEGER');
+  if (isUniversalInt || (isCtxInt && !isUnixTimestampNode(node))) {
+    const clean = inputVal.trim().replace(/,.*$/, '').trim(); // strip ", 0x..." suffix if user pasted
+    let v;
+    if (/^-?\d+$/.test(clean)) v = parseInt(clean, 10);
+    else if (/^0x[0-9a-fA-F]+$/i.test(clean)) v = parseInt(clean, 16);
+    else { errDiv.textContent = 'Enter a decimal or hex (0x…) integer'; return null; }
+    // Encode as BER integer (big-endian, minimal length, signed)
+    if (v === 0) return [0x00];
+    const bytes = [];
+    let n = v < 0 ? BigInt(v) : BigInt(v);
+    if (v > 0) {
+      while (n > 0n) { bytes.unshift(Number(n & 0xffn)); n >>= 8n; }
+      if (bytes[0] & 0x80) bytes.unshift(0x00); // positive sign byte
+    } else {
+      // negative: two's complement minimal encoding
+      let pos = BigInt(-v);
+      while (pos > 0n) { bytes.unshift(Number(pos & 0xffn)); pos >>= 8n; }
+      // two's complement
+      let carry = 1;
+      for (let i = bytes.length-1; i >= 0; i--) {
+        const b = (~bytes[i] & 0xff) + carry;
+        bytes[i] = b & 0xff; carry = b >> 8;
+      }
+      if (!(bytes[0] & 0x80)) bytes.unshift(0xff); // negative sign byte
+    }
+    return bytes;
+  }
+
   // For Unix timestamp INTEGER nodes: parse ISO date → Big-Endian 4-byte integer
   if (isUnixTimestampNode(node)) {
     const sec = isoToUnixSeconds(inputVal.trim());
@@ -1323,7 +1412,6 @@ function applyEdit(node, inputVal, isHex, errDiv, _constraintWarned=false, setWa
   }
 
   // For GeneralizedTime / UTCTime nodes: convert ISO-8601 input → ASN.1 GeneralizedTime string
-  // Accepts: "2026-04-23 09:44:01.608Z", "2026-04-23T09:44:01.608Z", "20260423094401.608Z"
   const isGenTime = (node.cls === 0 && (node.tag === 24 || node.tag === 23)) ||
                     (node.cls === 2 && (node.origChildType === 'GeneralizedTime' || node.origChildType === 'UTCTime'));
   if (isGenTime) {
@@ -1345,7 +1433,6 @@ function applyEdit(node, inputVal, isHex, errDiv, _constraintWarned=false, setWa
       const rangeStr = min === max ? `exactly ${min}` : `${min}..${max}`;
       errDiv.textContent = `ASN.1 SIZE constraint violation: value is ${len} byte(s), allowed: ${rangeStr}. External decoders will reject this file.`;
       errDiv.style.color = 'var(--orange)';
-      // Show as a warning, not a hard block — allow override via second click
       if (!_constraintWarned) {
         setWarned(true);
         return null;
@@ -1415,24 +1502,46 @@ function decodeGeneralizedTimeRenderer(s) {
 function recomputeDisplayValue(node) {
   const raw = node.rawValue || [];
   const buf = new Uint8Array(raw);
-  // BOOLEAN (universal tag=1, or context-tagged with origChildType BOOLEAN)
+  if (!raw.length) return node.tag === 5 ? 'NULL' : '';
+
+  // BOOLEAN
   if ((node.cls === 0 && node.tag === 1) ||
       (node.cls === 2 && node.origChildType === 'BOOLEAN')) {
     return raw[0] !== 0 ? 'TRUE' : 'FALSE';
   }
-  if(node.cls===0){
-    if(node.tag===2){ // INTEGER
+
+  if (node.cls === 0) {
+    if (node.tag === 2) { // INTEGER
       let v=0n; for(const b of buf)v=(v<<8n)|BigInt(b);
       if(buf[0]&0x80)v-=(1n<<BigInt(buf.length*8));
       const vn=Number(v); return`${vn},  0x${vn.toString(16)}`;
     }
-    if([23,24].includes(node.tag)) return decodeGeneralizedTimeRenderer(new TextDecoder().decode(buf));
-    if([12,19,22,26,30].includes(node.tag)) return new TextDecoder().decode(buf);
-    if(node.tag===6){ // OID – simplified
+    if (node.tag === 10) { // ENUMERATED universal
+      const v = raw[0];
+      const label = node.origChildType && rendererEnumMaps[node.origChildType]
+                    ? rendererEnumMaps[node.origChildType][v] : null;
+      return label ? `${label} ( ${v}, 0x${v.toString(16)} )` : `${v},  0x${v.toString(16)}`;
+    }
+    if ([23,24].includes(node.tag)) return decodeGeneralizedTimeRenderer(new TextDecoder().decode(buf));
+    if ([12,19,22,26,30].includes(node.tag)) return new TextDecoder().decode(buf);
+    if (node.tag === 6) {
       return '0x'+Array.from(buf).map(b=>b.toString(16).padStart(2,'0')).join('');
     }
   }
-  // Context-tagged INTEGER decoded as Unix timestamp
+
+  // Context-tagged ENUMERATED — look up in enum tables
+  if (node.cls === 2 && node.origChildType && rendererEnumMaps[node.origChildType]) {
+    const v = raw[0];
+    const label = rendererEnumMaps[node.origChildType][v];
+    return label ? `${label} ( ${v}, 0x${v.toString(16)} )` : `${v},  0x${v.toString(16)}`;
+  }
+  // Context-tagged ENUMERATED without known table
+  if (node.cls === 2 && node.origChildType === 'ENUMERATED') {
+    const v = raw[0];
+    return `${v},  0x${v.toString(16)}`;
+  }
+
+  // Context-tagged INTEGER
   if (node.cls === 2 && node.origChildType === 'INTEGER') {
     let v = 0n; for (const b of buf) v = (v << 8n) | BigInt(b);
     if (buf.length > 0 && buf[0] & 0x80) v -= (1n << BigInt(buf.length * 8));
@@ -1443,15 +1552,17 @@ function recomputeDisplayValue(node) {
     }
     return `${vn},  0x${vn.toString(16)}`;
   }
+
   // Context-tagged GeneralizedTime / UTCTime
   if (node.cls === 2 && (node.origChildType === 'GeneralizedTime' || node.origChildType === 'UTCTime')) {
     return decodeGeneralizedTimeRenderer(new TextDecoder().decode(buf));
   }
+
   // Default: printable string or hex
-  const s=new TextDecoder().decode(buf);
-  if([...s].every(c=>{const cc=c.charCodeAt(0);return cc>=32&&cc<127;})) return s;
-  const hex=Array.from(buf).map(b=>b.toString(16).padStart(2,'0')).join('');
-  return raw.length<=16?'0x'+hex:`0x${hex.slice(0,32)}… (${raw.length} B)`;
+  const s = new TextDecoder().decode(buf);
+  if ([...s].every(c => { const cc=c.charCodeAt(0); return cc>=32&&cc<127; })) return s;
+  const hex = Array.from(buf).map(b=>b.toString(16).padStart(2,'0')).join('');
+  return raw.length<=16 ? '0x'+hex : `0x${hex.slice(0,32)}… (${raw.length} B)`;
 }
 
 // ── Tree building ─────────────────────────────────────────────────────────────

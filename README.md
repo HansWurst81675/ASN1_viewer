@@ -211,6 +211,9 @@ Beim Start werden alle `*.asn` / `*.asn1`-Dateien aus `asn1_patched/` geladen un
 | `UmtsCS-IRIsContent` | `iRI-Begin-record`, `iRI-End-record`, … |
 | `UmtsIRIsContent` | `iRI-Begin-record`, `iRI-End-record`, … |
 | `TS33128CCPayload` | `cCPayloadOID`, `pDU` |
+| `EPSLocation` | `tai`, `ecgi`, `userLocationInformation`, `ageOfLocation` |
+| `EPS-TAI` | `pLMN-ID`, `tAC` |
+| `EPS-ECGI` | `pLMN-ID`, `eUTRANcellID` |
 
 ### Gemessene Label-Abdeckung (729 Testdateien, v1.3.build_48)
 
@@ -243,6 +246,14 @@ npm start
 ---
 
 ## Changelog
+
+### v1.4.build_57 (2026-05-28)
+- **ENUMERATED-Edit-Bug behoben** — Beim Bearbeiten von ENUMERATED-Feldern (z.B. `notificationType`) wurde die Eingabe `"1"` fälschlicherweise als UTF-8-Byte `0x31` gespeichert statt als BER-Integer `0x01`. Ursache: `isTextPrimitive()` hielt den Anzeigetext `"modification ( 3, 0x3 )"` für einen Textstring (alle Zeichen druckbares ASCII). Fix: ENUMERATED und INTEGER werden jetzt explizit vom Textpfad ausgenommen.
+- **ENUMERATED-Anzeige nach Edit** — Nach dem Speichern wurde der Enum-Label nicht mehr angezeigt (`"1"` statt `"activating ( 1, 0x1 )"`), weil `recomputeDisplayValue()` im Renderer keine Zugriff auf die Enum-Tabellen hatte. Fix: neuer IPC-Kanal `get-enum-maps` überträgt beim Start alle Enum-Tabellen (inkl. Hardcoded-Enums wie `LINotificationType`) ans Renderer.
+- **`LINotificationType` als bekannter Enum** — `activation(1)`, `deactivation(2)`, `modification(3)` werden jetzt auch ohne ASN.1-Datei-Match korrekt aufgelöst (waren vorher nur als `_enum`-Eigenschaft in der tagMap gespeichert, nicht in `getEnumMaps()`).
+- **INTEGER-Edit-Bug behoben** — Gleicher Fehler wie bei ENUMERATED: Eingabe `"5"` wurde als `0x35` (ASCII) statt `0x05` gespeichert. Context-tagged INTEGER und UNIVERSAL INTEGER werden jetzt korrekt als BER-codierte Ganzzahl (big-endian, signed, minimale Länge) enkodiert. Dezimal- und Hex-Eingabe (`0x…`) werden akzeptiert.
+- **Edit-Dialog verbessert** — ENUMERATED-Felder zeigen im Hinweistext alle gültigen Werte (z.B. `1=activation  2=deactivation  3=modification`); Integer-Felder zeigen `INTEGER — enter decimal or hex (0x…)`. Vorausgefüllter Wert ist die reine Zahl (ohne `", 0xN"`-Suffix).
+- **`userLocationInfo` (EPS/LTE) korrekt dekodiert** — In `li_ps_pdu_Not5G`-Dateien war `userLocationInfo [1]` ein primitives packed-binary-Feld (3GPP TS 29.274 §8.21) innerhalb von `gsmLocation [2]`, kein nested BER. Bitmap-Byte steuert welche Location-Typen vorhanden sind. TAI, ECGI, CGI, SAI und RAI werden über Bitmap-Bits erkannt und lesbar formatiert. Ausgabe-Format analog zu 3GPP-Diagramm: `TAI: MCC=262, MNC=01, TAC=25508  |  ECGI: MCC=262, MNC=01, eNB-ID=31142, Cell-ID=208`. Reine GSM-Koordinaten-Felder (`geoCoordinates`) bleiben unverändert als `N492713.75` / `E0080907.08` dekodiert.
 
 ### v1.4.build_56 (2026-05-15)
 - **BOOLEAN OPTIONAL korrekt** — Da `sMSContentRemovedIndicator [5] BOOLEAN OPTIONAL` semantisch nur als vorhanden (TRUE) oder fehlend kodiert werden kann, zeigt der Edit-Dialog jetzt zwei Optionen: **TRUE** (Wert bleibt `85 01 FF`) oder **Entfernen** (Tag wird beim Speichern vollständig aus dem BER-Stream gelöscht). `FALSE` existiert in diesem Kontext nicht. Die entfernte Zeile wird im Baum durchgestrichen und mit `⟨entfernt⟩` markiert.

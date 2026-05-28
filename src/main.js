@@ -143,6 +143,32 @@ function buildTagMaps(asn1Dir) {
     3:['utm-AltitudeAboveWGS84Ellipsoid','PrintableString'],
   };
 
+  // EPSLocation virtual type — 3GPP TS 29.274 §8.21 / TS 33.108
+  // userLocationInfo in EPS IRI contains TAI (5 B) + ECGI (7 B) packed, or just one of them.
+  // The outer byte is a bitmap: bit7=CGI, bit6=SAI, bit5=RAI, bit4=TAI, bit3=ECGI, bit2=LAI, bit1=MME-ID
+  // We expose the two most common sub-structures as context-tagged children.
+  maps['EPSLocation'] = {
+    1: ['tai',  'EPS-TAI'],
+    2: ['ecgi', 'EPS-ECGI'],
+    3: ['userLocationInformation', 'OCTET'],
+    4: ['currentLocation',         'OCTET'],
+    5: ['ageOfLocation',           'INTEGER'],
+  };
+
+  // EPS TAI (Tracking Area Identity) — PLMN-ID (3 B MCC/MNC BCD) + TAC (2 B)
+  // EPS-PLMNID: pseudo-type → scalarValue decodes 3 bytes as MCC/MNC BCD nibbles
+  maps['EPS-TAI'] = {
+    1: ['pLMN-ID', 'EPS-PLMNID'],
+    2: ['tAC',     'OCTET'],
+  };
+
+  // EPS ECGI (E-UTRAN Cell Global Identifier) — PLMN-ID (3 B) + ECI (4 B, 28-bit value)
+  // EPS-ECI: pseudo-type → scalarValue decodes 4 bytes as 28-bit ECI
+  maps['EPS-ECGI'] = {
+    1: ['pLMN-ID',     'EPS-PLMNID'],
+    2: ['eUTRANcellID','EPS-ECI'],
+  };
+
   maps['SmsContents'] = {
     1:['initiator',                    'ENUMERATED'],
     2:['transfer-status',              'ENUMERATED'],
@@ -444,12 +470,17 @@ function looksLikeBer(raw) {
 // ── Enhanced scalar decoders ──────────────────────────────────────────────────
 
 // Loaded lazily after createWindow
+// Hardcoded enum tables for types defined inline or not captured by regex
+const HARDCODED_ENUMS = {
+  'LINotificationType': { 1:'activation', 2:'deactivation', 3:'modification' },
+};
+
 let enumMaps = null;
 function getEnumMaps() {
   if (enumMaps) return enumMaps;
   const asn1Dir = getAsn1Dir();
-  if (!asn1Dir) return (enumMaps = {});
-  enumMaps = {};
+  if (!asn1Dir) return (enumMaps = Object.assign({}, HARDCODED_ENUMS));
+  enumMaps = Object.assign({}, HARDCODED_ENUMS);
   for (const fname of fs.readdirSync(asn1Dir).filter(f=>f.endsWith('.asn')||f.endsWith('.asn1')).sort()) {
     const content = fs.readFileSync(path.join(asn1Dir, fname), 'utf8');
     for (const m of content.matchAll(/^([A-Z][A-Za-z0-9-]+)\s*::=\s*ENUMERATED\s*\{([\s\S]*?)\}/gm)) {
@@ -574,6 +605,79 @@ function scalarValue(cls, tag, raw, fieldName, origChildType) {
   if (cls === 2 && (origChildType === 'GeneralizedTime' || origChildType === 'UTCTime')) {
     const s = Buffer.from(raw).toString('utf8');
     return decodeGeneralizedTime(s);
+  }
+
+  // EPS PLMN-ID: 3 bytes BCD nibbles → MCC=XYZ, MNC=AB[C]  (3GPP TS 24.008 §10.5.1.13)
+  // Byte 0: MCC digit2 | MCC digit1;  Byte 1: MNC digit3 (0xF if 2-digit) | MCC digit3
+  // Byte 2: MNC digit2 | MNC digit1
+  if (origChildType === 'EPS-PLMNID' && raw.length === 3) {
+    const d = (b, n) => (b >> (n ? 4 : 0)) & 0x0f;
+    const mcc = `${d(raw[0],0)}${d(raw[0],1)}${d(raw[1],0)}`;
+    const mnc3 = d(raw[1],1);
+    const mnc = mnc3 === 0xf
+      ? `${d(raw[2],0)}${d(raw[2],1)}`
+      : `${d(raw[2],0)}${d(raw[2],1)}${mnc3}`;
+    return `MCC=${mcc}, MNC=${mnc}`;
+  }
+
+  // EPS ECI: 4 bytes, 28-bit value (upper nibble of byte 0 unused/zero)
+  // eNB-ID = upper 20 bits, Cell-ID = lower 8 bits
+  if (origChildType === 'EPS-ECI' && raw.length === 4) {
+    const eci = ((raw[0] & 0x0f) << 24) | (raw[1] << 16) | (raw[2] << 8) | raw[3];
+    const enbId = (eci >> 8) & 0xfffff;
+    const cellId = eci & 0xff;
+    return `ECI=0x${eci.toString(16).padStart(7,'0')}  (eNB-ID=${enbId}, Cell-ID=${cellId})`;
+  }
+
+  // EPSLocation packed binary (3GPP TS 29.274 §8.21) — not nested BER, raw bytes
+  // Bitmap byte: bit4=TAI present, bit3=ECGI present (both common in LTE)
+  // TAI = 3 B PLMN-ID + 2 B TAC;  ECGI = 3 B PLMN-ID + 4 B ECI (28-bit)
+  // Also triggered for GsmGeoCoordinates when the bytes carry EPS bitmap flags (userLocationInfo
+  // inside GSMLocation in EPS IRI files — same ASN.1 type, different semantic content)
+  const isEpsLocType = origChildType === 'EPSLocation';
+  const looksLikeEpsLoc = origChildType === 'GsmGeoCoordinates' && raw.length >= 1 &&
+    (raw[0] & 0x18) !== 0 &&   // TAI or ECGI bit set
+    raw[0] < 0x20;             // bitmap byte, not a printable char
+  if ((isEpsLocType || looksLikeEpsLoc) && raw.length >= 1) {
+    const bitmap = raw[0];
+    const parts = [];
+    let offset = 1;
+    const decodePlmn = (r, o) => {
+      if (o + 3 > r.length) return null;
+      const d = (b, n) => (b >> (n ? 4 : 0)) & 0x0f;
+      const mcc = `${d(r[o],0)}${d(r[o],1)}${d(r[o+1],0)}`;
+      const mnc3 = d(r[o+1],1);
+      const mnc = mnc3 === 0xf ? `${d(r[o+2],0)}${d(r[o+2],1)}` : `${d(r[o+2],0)}${d(r[o+2],1)}${mnc3}`;
+      return `MCC=${mcc}, MNC=${mnc}`;
+    };
+    // CGI (bit7): PLMN(3) + LAC(2) + CI(2)
+    if (bitmap & 0x80) { if (offset+7 <= raw.length) { const plmn=decodePlmn(raw,offset); const lac=((raw[offset+3]<<8)|raw[offset+4]); const ci=((raw[offset+5]<<8)|raw[offset+6]); parts.push(`CGI: ${plmn}, LAC=${lac}, CI=${ci}`); offset+=7; } }
+    // SAI (bit6): PLMN(3) + LAC(2) + SAC(2)
+    if (bitmap & 0x40) { if (offset+7 <= raw.length) { const plmn=decodePlmn(raw,offset); const lac=((raw[offset+3]<<8)|raw[offset+4]); const sac=((raw[offset+5]<<8)|raw[offset+6]); parts.push(`SAI: ${plmn}, LAC=${lac}, SAC=${sac}`); offset+=7; } }
+    // RAI (bit5): PLMN(3) + LAC(2) + RAC(1)
+    if (bitmap & 0x20) { if (offset+6 <= raw.length) { const plmn=decodePlmn(raw,offset); const lac=((raw[offset+3]<<8)|raw[offset+4]); const rac=raw[offset+5]; parts.push(`RAI: ${plmn}, LAC=${lac}, RAC=${rac}`); offset+=6; } }
+    // TAI (bit4): PLMN(3) + TAC(2)
+    if (bitmap & 0x10) {
+      if (offset+5 <= raw.length) {
+        const plmn = decodePlmn(raw, offset);
+        const tac = (raw[offset+3] << 8) | raw[offset+4];
+        parts.push(`TAI: ${plmn}, TAC=${tac}`);
+        offset += 5;
+      }
+    }
+    // ECGI (bit3): PLMN(3) + ECI(4, 28-bit = eNB-ID 20 bit + Cell-ID 8 bit)
+    if (bitmap & 0x08) {
+      if (offset+7 <= raw.length) {
+        const plmn = decodePlmn(raw, offset);
+        const eci = ((raw[offset+3] & 0x0f) << 24) | (raw[offset+4] << 16) | (raw[offset+5] << 8) | raw[offset+6];
+        const enbId = (eci >> 8) & 0xfffff;
+        const cellId = eci & 0xff;
+        parts.push(`ECGI: ${plmn}, eNB-ID=${enbId}, Cell-ID=${cellId}`);
+        offset += 7;
+      }
+    }
+    if (parts.length) return parts.join('  |  ');
+    return `0x${Array.from(raw).map(b=>b.toString(16).padStart(2,'0')).join('')}`;
   }
 
   // MSISDN/IMSI/IMEI: BCD decode only if bytes are non-printable (real BCD)
@@ -702,7 +806,10 @@ const EXTRA_HINTS = {
   'Party-Information,1':        'UmtsHI2PartyIdentity',   // Umts-HI2Operations variant
   // GSMLocation geoCoordinates inline SEQUENCE
   'GSMLocation,1':              'GsmGeoCoordinates',
-  'GSMLocation,2':              'UtmCoordinates',
+  'GSMLocation,2':              'UtmCoordinates',  // EPSLocation sub-fields
+  'EPSLocation,1':              'EPS-TAI',
+  'EPSLocation,2':              'EPS-ECGI',
+  // userLocationInfo [1] inside GSMLocation: decoded in scalarValue via bitmap heuristic
   // Other IRIContents CHOICE members
   'UMTSIRI,0':                  'UmtsIRI-Parameters',
   'UMTSIRI,1':                  'UmtsIRIsContent',
@@ -1071,6 +1178,7 @@ ipcMain.handle('open-file-buffer', (_, buf, name) => loadFromBuffer(Buffer.from(
 ipcMain.handle('get-schema-info', () => ({ typeCount: Object.keys(tagMaps).length, asn1Dir: getAsn1Dir(), version: app.getVersion() }));
 ipcMain.handle('get-recent-files', () => recentFiles);
 ipcMain.handle('clear-recent-files', () => { recentFiles=[]; saveRecent(); rebuildMenu(); });
+ipcMain.handle('get-enum-maps', () => getEnumMaps());
 
 // Parse a BER file for compare mode (returns nodes + metadata, no side effects)
 ipcMain.handle('parse-ber-file', async (_, filePath) => {

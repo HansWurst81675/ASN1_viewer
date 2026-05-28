@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('berApi', {
   exportTxt:        (p, txt)       => ipcRenderer.invoke('export-txt', p, txt),
   exportTxtFmt2:    (p, nodes)     => ipcRenderer.invoke('export-txt-fmt2', p, nodes),
   getSchemaInfo:    ()             => ipcRenderer.invoke('get-schema-info'),
+  getEnumMaps:      ()             => ipcRenderer.invoke('get-enum-maps'),
   openExternal:     (url)          => shell.openExternal(url),
   fetchOsmTile:     (z, x, y)      => ipcRenderer.invoke('fetch-osm-tile', z, x, y),
 
