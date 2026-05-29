@@ -143,6 +143,9 @@ function buildTagMaps(asn1Dir) {
     3:['utm-AltitudeAboveWGS84Ellipsoid','PrintableString'],
   };
 
+  // EPSLocation — 3GPP TS 29.274 §8.21 packed binary, decoded entirely in scalarValue.
+  // No child map needed: it is a PRIMITIVE field, not nested BER.
+
   maps['SmsContents'] = {
     1:['initiator',                    'ENUMERATED'],
     2:['transfer-status',              'ENUMERATED'],
@@ -444,12 +447,17 @@ function looksLikeBer(raw) {
 // ── Enhanced scalar decoders ──────────────────────────────────────────────────
 
 // Loaded lazily after createWindow
+// Hardcoded enum tables for types defined inline or not captured by regex
+const HARDCODED_ENUMS = {
+  'LINotificationType': { 1:'activation', 2:'deactivation', 3:'modification' },
+};
+
 let enumMaps = null;
 function getEnumMaps() {
   if (enumMaps) return enumMaps;
   const asn1Dir = getAsn1Dir();
-  if (!asn1Dir) return (enumMaps = {});
-  enumMaps = {};
+  if (!asn1Dir) return (enumMaps = Object.assign({}, HARDCODED_ENUMS));
+  enumMaps = Object.assign({}, HARDCODED_ENUMS);
   for (const fname of fs.readdirSync(asn1Dir).filter(f=>f.endsWith('.asn')||f.endsWith('.asn1')).sort()) {
     const content = fs.readFileSync(path.join(asn1Dir, fname), 'utf8');
     for (const m of content.matchAll(/^([A-Z][A-Za-z0-9-]+)\s*::=\s*ENUMERATED\s*\{([\s\S]*?)\}/gm)) {
@@ -574,6 +582,77 @@ function scalarValue(cls, tag, raw, fieldName, origChildType) {
   if (cls === 2 && (origChildType === 'GeneralizedTime' || origChildType === 'UTCTime')) {
     const s = Buffer.from(raw).toString('utf8');
     return decodeGeneralizedTime(s);
+  }
+
+  // Helper: decode 3-byte PLMN-ID BCD nibbles → "MCC=262, MNC=01"
+  const decodePlmnBytes = (r, o) => {
+    if (o + 3 > r.length) return '?';
+    const d = (b, n) => (b >> (n ? 4 : 0)) & 0x0f;
+    const mcc = `${d(r[o],0)}${d(r[o],1)}${d(r[o+1],0)}`;
+    const mnc3 = d(r[o+1],1);
+    const mnc = mnc3 === 0xf ? `${d(r[o+2],0)}${d(r[o+2],1)}` : `${d(r[o+2],0)}${d(r[o+2],1)}${mnc3}`;
+    return `MCC=${mcc}, MNC=${mnc}`;
+  };
+
+  // EPS-TAI-BYTES: userLocationInfo field contains full EPSLocation packed binary
+  // (bitmap byte + variable TAI/ECGI/CGI blocks) — use same bitmap decoder as looksLikeEpsLoc
+  if (origChildType === 'EPS-TAI-BYTES' && raw.length >= 1) {
+    const bitmap = raw[0];
+    const parts = [];
+    let offset = 1;
+    const dp = decodePlmnBytes;
+    // CGI (bit7)
+    if (bitmap & 0x80) { if (offset+7<=raw.length) { parts.push(`CGI: ${dp(raw,offset)}, LAC=${(raw[offset+3]<<8)|raw[offset+4]}, CI=${(raw[offset+5]<<8)|raw[offset+6]}`); offset+=7; } }
+    // SAI (bit6)
+    if (bitmap & 0x40) { if (offset+7<=raw.length) { parts.push(`SAI: ${dp(raw,offset)}, LAC=${(raw[offset+3]<<8)|raw[offset+4]}, SAC=${(raw[offset+5]<<8)|raw[offset+6]}`); offset+=7; } }
+    // RAI (bit5)
+    if (bitmap & 0x20) { if (offset+6<=raw.length) { parts.push(`RAI: ${dp(raw,offset)}, LAC=${(raw[offset+3]<<8)|raw[offset+4]}, RAC=${raw[offset+5]}`); offset+=6; } }
+    // TAI (bit4): PLMN(3) + TAC(2)
+    if (bitmap & 0x10) { if (offset+5<=raw.length) { const tac=(raw[offset+3]<<8)|raw[offset+4]; parts.push(`TAI: ${dp(raw,offset)}, TAC=${tac}`); offset+=5; } }
+    // ECGI (bit3): PLMN(3) + ECI 28-bit
+    if (bitmap & 0x08) { if (offset+7<=raw.length) { const eci=((raw[offset+3]&0x0f)<<24)|(raw[offset+4]<<16)|(raw[offset+5]<<8)|raw[offset+6]; parts.push(`ECGI: ${dp(raw,offset)}, eNB-ID=${(eci>>8)&0xfffff}, Cell-ID=${eci&0xff}`); offset+=7; } }
+    if (parts.length) return parts.join('  |  ');
+    return `0x${Array.from(raw).map(b=>b.toString(16).padStart(2,'0')).join('')}`;
+  }
+
+  // EPSLocation packed binary — only triggered for GsmGeoCoordinates with EPS bitmap flags
+  // (userLocationInfo inside GSMLocation in EPS IRI files — same ASN.1 type, different content)
+  const looksLikeEpsLoc = origChildType === 'GsmGeoCoordinates' && raw.length >= 1 &&
+    (raw[0] & 0x18) !== 0 &&
+    raw[0] < 0x20;
+  if (looksLikeEpsLoc && raw.length >= 1) {
+    const bitmap = raw[0];
+    const parts = [];
+    let offset = 1;
+    const decodePlmn = decodePlmnBytes;
+    // CGI (bit7): PLMN(3) + LAC(2) + CI(2)
+    if (bitmap & 0x80) { if (offset+7 <= raw.length) { const plmn=decodePlmn(raw,offset); const lac=((raw[offset+3]<<8)|raw[offset+4]); const ci=((raw[offset+5]<<8)|raw[offset+6]); parts.push(`CGI: ${plmn}, LAC=${lac}, CI=${ci}`); offset+=7; } }
+    // SAI (bit6): PLMN(3) + LAC(2) + SAC(2)
+    if (bitmap & 0x40) { if (offset+7 <= raw.length) { const plmn=decodePlmn(raw,offset); const lac=((raw[offset+3]<<8)|raw[offset+4]); const sac=((raw[offset+5]<<8)|raw[offset+6]); parts.push(`SAI: ${plmn}, LAC=${lac}, SAC=${sac}`); offset+=7; } }
+    // RAI (bit5): PLMN(3) + LAC(2) + RAC(1)
+    if (bitmap & 0x20) { if (offset+6 <= raw.length) { const plmn=decodePlmn(raw,offset); const lac=((raw[offset+3]<<8)|raw[offset+4]); const rac=raw[offset+5]; parts.push(`RAI: ${plmn}, LAC=${lac}, RAC=${rac}`); offset+=6; } }
+    // TAI (bit4): PLMN(3) + TAC(2)
+    if (bitmap & 0x10) {
+      if (offset+5 <= raw.length) {
+        const plmn = decodePlmn(raw, offset);
+        const tac = (raw[offset+3] << 8) | raw[offset+4];
+        parts.push(`TAI: ${plmn}, TAC=${tac}`);
+        offset += 5;
+      }
+    }
+    // ECGI (bit3): PLMN(3) + ECI(4, 28-bit = eNB-ID 20 bit + Cell-ID 8 bit)
+    if (bitmap & 0x08) {
+      if (offset+7 <= raw.length) {
+        const plmn = decodePlmn(raw, offset);
+        const eci = ((raw[offset+3] & 0x0f) << 24) | (raw[offset+4] << 16) | (raw[offset+5] << 8) | raw[offset+6];
+        const enbId = (eci >> 8) & 0xfffff;
+        const cellId = eci & 0xff;
+        parts.push(`ECGI: ${plmn}, eNB-ID=${enbId}, Cell-ID=${cellId}`);
+        offset += 7;
+      }
+    }
+    if (parts.length) return parts.join('  |  ');
+    return `0x${Array.from(raw).map(b=>b.toString(16).padStart(2,'0')).join('')}`;
   }
 
   // MSISDN/IMSI/IMEI: BCD decode only if bytes are non-printable (real BCD)
@@ -703,6 +782,9 @@ const EXTRA_HINTS = {
   // GSMLocation geoCoordinates inline SEQUENCE
   'GSMLocation,1':              'GsmGeoCoordinates',
   'GSMLocation,2':              'UtmCoordinates',
+  // userLocationInfo [1] inside GSMLocation in EPS IRI files: decoded in scalarValue via bitmap heuristic
+  // EPSLocation children — only userLocationInfo[1] gets packed binary decoding
+  'EPSLocation,1':              'EPS-TAI-BYTES',
   // Other IRIContents CHOICE members
   'UMTSIRI,0':                  'UmtsIRI-Parameters',
   'UMTSIRI,1':                  'UmtsIRIsContent',
@@ -810,7 +892,7 @@ function parseBer(buf, baseOffset, typeHint, tagMaps, depth) {
         }
       }
       const override=EXTRA_HINTS[`${typeHint},${t.tag}`];
-      if(override){childType=override;node.typeName=override;}
+      if(override){childType=override; node.typeName=override; node.origChildType=override;}
     }else if(t.cls===0){node.typeName=UNIV[t.tag]||`UNIV-${t.tag}`;}
 
     let recurseHint=childType;
@@ -837,7 +919,8 @@ function parseBer(buf, baseOffset, typeHint, tagMaps, depth) {
     // Only apply forceScalar based on origChildType, NOT fieldName
     // (fieldName regex was too broad: matched 'communicationIdentifier', 'extendedInterceptionPointID' etc.)
     const STRING_TYPES = new Set(['PrintableString','IA5String','UTF8String','VisibleString',
-      'BMPString','GeneralizedTime','UTCTime','LawfulInterceptionIdentifier']);
+      'BMPString','GeneralizedTime','UTCTime','LawfulInterceptionIdentifier',
+      'EPS-TAI-BYTES','EPS-ECGI-BYTES']);
     const forceScalar = t.cls===2 && t.cons && STRING_TYPES.has(node.origChildType);
 
     if(t.cons && !forceScalar){
@@ -1071,6 +1154,7 @@ ipcMain.handle('open-file-buffer', (_, buf, name) => loadFromBuffer(Buffer.from(
 ipcMain.handle('get-schema-info', () => ({ typeCount: Object.keys(tagMaps).length, asn1Dir: getAsn1Dir(), version: app.getVersion() }));
 ipcMain.handle('get-recent-files', () => recentFiles);
 ipcMain.handle('clear-recent-files', () => { recentFiles=[]; saveRecent(); rebuildMenu(); });
+ipcMain.handle('get-enum-maps', () => getEnumMaps());
 
 // Parse a BER file for compare mode (returns nodes + metadata, no side effects)
 ipcMain.handle('parse-ber-file', async (_, filePath) => {
