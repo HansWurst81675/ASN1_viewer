@@ -143,31 +143,8 @@ function buildTagMaps(asn1Dir) {
     3:['utm-AltitudeAboveWGS84Ellipsoid','PrintableString'],
   };
 
-  // EPSLocation virtual type — 3GPP TS 29.274 §8.21 / TS 33.108
-  // userLocationInfo in EPS IRI contains TAI (5 B) + ECGI (7 B) packed, or just one of them.
-  // The outer byte is a bitmap: bit7=CGI, bit6=SAI, bit5=RAI, bit4=TAI, bit3=ECGI, bit2=LAI, bit1=MME-ID
-  // We expose the two most common sub-structures as context-tagged children.
-  maps['EPSLocation'] = {
-    1: ['tai',  'EPS-TAI'],
-    2: ['ecgi', 'EPS-ECGI'],
-    3: ['userLocationInformation', 'OCTET'],
-    4: ['currentLocation',         'OCTET'],
-    5: ['ageOfLocation',           'INTEGER'],
-  };
-
-  // EPS TAI (Tracking Area Identity) — PLMN-ID (3 B MCC/MNC BCD) + TAC (2 B)
-  // EPS-PLMNID: pseudo-type → scalarValue decodes 3 bytes as MCC/MNC BCD nibbles
-  maps['EPS-TAI'] = {
-    1: ['pLMN-ID', 'EPS-PLMNID'],
-    2: ['tAC',     'OCTET'],
-  };
-
-  // EPS ECGI (E-UTRAN Cell Global Identifier) — PLMN-ID (3 B) + ECI (4 B, 28-bit value)
-  // EPS-ECI: pseudo-type → scalarValue decodes 4 bytes as 28-bit ECI
-  maps['EPS-ECGI'] = {
-    1: ['pLMN-ID',     'EPS-PLMNID'],
-    2: ['eUTRANcellID','EPS-ECI'],
-  };
+  // EPSLocation — 3GPP TS 29.274 §8.21 packed binary, decoded entirely in scalarValue.
+  // No child map needed: it is a PRIMITIVE field, not nested BER.
 
   maps['SmsContents'] = {
     1:['initiator',                    'ENUMERATED'],
@@ -607,49 +584,43 @@ function scalarValue(cls, tag, raw, fieldName, origChildType) {
     return decodeGeneralizedTime(s);
   }
 
-  // EPS PLMN-ID: 3 bytes BCD nibbles → MCC=XYZ, MNC=AB[C]  (3GPP TS 24.008 §10.5.1.13)
-  // Byte 0: MCC digit2 | MCC digit1;  Byte 1: MNC digit3 (0xF if 2-digit) | MCC digit3
-  // Byte 2: MNC digit2 | MNC digit1
-  if (origChildType === 'EPS-PLMNID' && raw.length === 3) {
+  // Helper: decode 3-byte PLMN-ID BCD nibbles → "MCC=262, MNC=01"
+  const decodePlmnBytes = (r, o) => {
+    if (o + 3 > r.length) return '?';
     const d = (b, n) => (b >> (n ? 4 : 0)) & 0x0f;
-    const mcc = `${d(raw[0],0)}${d(raw[0],1)}${d(raw[1],0)}`;
-    const mnc3 = d(raw[1],1);
-    const mnc = mnc3 === 0xf
-      ? `${d(raw[2],0)}${d(raw[2],1)}`
-      : `${d(raw[2],0)}${d(raw[2],1)}${mnc3}`;
+    const mcc = `${d(r[o],0)}${d(r[o],1)}${d(r[o+1],0)}`;
+    const mnc3 = d(r[o+1],1);
+    const mnc = mnc3 === 0xf ? `${d(r[o+2],0)}${d(r[o+2],1)}` : `${d(r[o+2],0)}${d(r[o+2],1)}${mnc3}`;
     return `MCC=${mcc}, MNC=${mnc}`;
+  };
+
+  // EPS-TAI-BYTES: 5 bytes — PLMN-ID (3 B) + TAC (2 B)
+  if (origChildType === 'EPS-TAI-BYTES' && raw.length >= 5) {
+    const plmn = decodePlmnBytes(raw, 0);
+    const tac = (raw[3] << 8) | raw[4];
+    return `${plmn}, TAC=${tac}`;
   }
 
-  // EPS ECI: 4 bytes, 28-bit value (upper nibble of byte 0 unused/zero)
-  // eNB-ID = upper 20 bits, Cell-ID = lower 8 bits
-  if (origChildType === 'EPS-ECI' && raw.length === 4) {
-    const eci = ((raw[0] & 0x0f) << 24) | (raw[1] << 16) | (raw[2] << 8) | raw[3];
+  // EPS-ECGI-BYTES: 7 bytes — PLMN-ID (3 B) + ECI (4 B, 28-bit: eNB-ID 20 bit + Cell-ID 8 bit)
+  if (origChildType === 'EPS-ECGI-BYTES' && raw.length >= 7) {
+    const plmn = decodePlmnBytes(raw, 0);
+    const eci = ((raw[3] & 0x0f) << 24) | (raw[4] << 16) | (raw[5] << 8) | raw[6];
     const enbId = (eci >> 8) & 0xfffff;
     const cellId = eci & 0xff;
-    return `ECI=0x${eci.toString(16).padStart(7,'0')}  (eNB-ID=${enbId}, Cell-ID=${cellId})`;
+    return `${plmn}, eNB-ID=${enbId}, Cell-ID=${cellId}`;
   }
 
-  // EPSLocation packed binary (3GPP TS 29.274 §8.21) — not nested BER, raw bytes
-  // Bitmap byte: bit4=TAI present, bit3=ECGI present (both common in LTE)
-  // TAI = 3 B PLMN-ID + 2 B TAC;  ECGI = 3 B PLMN-ID + 4 B ECI (28-bit)
-  // Also triggered for GsmGeoCoordinates when the bytes carry EPS bitmap flags (userLocationInfo
-  // inside GSMLocation in EPS IRI files — same ASN.1 type, different semantic content)
+  // EPSLocation packed binary (3GPP TS 29.274 §8.21) — bitmap byte + TAI + ECGI blocks
+  // Also triggered for GsmGeoCoordinates with EPS bitmap flags (userLocationInfo inside GSMLocation)
   const isEpsLocType = origChildType === 'EPSLocation';
   const looksLikeEpsLoc = origChildType === 'GsmGeoCoordinates' && raw.length >= 1 &&
-    (raw[0] & 0x18) !== 0 &&   // TAI or ECGI bit set
-    raw[0] < 0x20;             // bitmap byte, not a printable char
+    (raw[0] & 0x18) !== 0 &&
+    raw[0] < 0x20;
   if ((isEpsLocType || looksLikeEpsLoc) && raw.length >= 1) {
     const bitmap = raw[0];
     const parts = [];
     let offset = 1;
-    const decodePlmn = (r, o) => {
-      if (o + 3 > r.length) return null;
-      const d = (b, n) => (b >> (n ? 4 : 0)) & 0x0f;
-      const mcc = `${d(r[o],0)}${d(r[o],1)}${d(r[o+1],0)}`;
-      const mnc3 = d(r[o+1],1);
-      const mnc = mnc3 === 0xf ? `${d(r[o+2],0)}${d(r[o+2],1)}` : `${d(r[o+2],0)}${d(r[o+2],1)}${mnc3}`;
-      return `MCC=${mcc}, MNC=${mnc}`;
-    };
+    const decodePlmn = decodePlmnBytes;
     // CGI (bit7): PLMN(3) + LAC(2) + CI(2)
     if (bitmap & 0x80) { if (offset+7 <= raw.length) { const plmn=decodePlmn(raw,offset); const lac=((raw[offset+3]<<8)|raw[offset+4]); const ci=((raw[offset+5]<<8)|raw[offset+6]); parts.push(`CGI: ${plmn}, LAC=${lac}, CI=${ci}`); offset+=7; } }
     // SAI (bit6): PLMN(3) + LAC(2) + SAC(2)
@@ -806,10 +777,11 @@ const EXTRA_HINTS = {
   'Party-Information,1':        'UmtsHI2PartyIdentity',   // Umts-HI2Operations variant
   // GSMLocation geoCoordinates inline SEQUENCE
   'GSMLocation,1':              'GsmGeoCoordinates',
-  'GSMLocation,2':              'UtmCoordinates',  // EPSLocation sub-fields
-  'EPSLocation,1':              'EPS-TAI',
-  'EPSLocation,2':              'EPS-ECGI',
-  // userLocationInfo [1] inside GSMLocation: decoded in scalarValue via bitmap heuristic
+  'GSMLocation,2':              'UtmCoordinates',
+  // userLocationInfo [1] inside GSMLocation in EPS IRI files: decoded in scalarValue via bitmap heuristic
+  // EPSLocation children — packed binary fields, force scalar decoding via pseudo-types
+  'EPSLocation,1':              'EPS-TAI-BYTES',
+  'EPSLocation,2':              'EPS-ECGI-BYTES',
   // Other IRIContents CHOICE members
   'UMTSIRI,0':                  'UmtsIRI-Parameters',
   'UMTSIRI,1':                  'UmtsIRIsContent',
@@ -944,7 +916,8 @@ function parseBer(buf, baseOffset, typeHint, tagMaps, depth) {
     // Only apply forceScalar based on origChildType, NOT fieldName
     // (fieldName regex was too broad: matched 'communicationIdentifier', 'extendedInterceptionPointID' etc.)
     const STRING_TYPES = new Set(['PrintableString','IA5String','UTF8String','VisibleString',
-      'BMPString','GeneralizedTime','UTCTime','LawfulInterceptionIdentifier']);
+      'BMPString','GeneralizedTime','UTCTime','LawfulInterceptionIdentifier',
+      'EPS-TAI-BYTES','EPS-ECGI-BYTES','EPSLocation']);
     const forceScalar = t.cls===2 && t.cons && STRING_TYPES.has(node.origChildType);
 
     if(t.cons && !forceScalar){
