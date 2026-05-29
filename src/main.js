@@ -594,29 +594,33 @@ function scalarValue(cls, tag, raw, fieldName, origChildType) {
     return `MCC=${mcc}, MNC=${mnc}`;
   };
 
-  // EPS-TAI-BYTES: 5 bytes — PLMN-ID (3 B) + TAC (2 B)
-  if (origChildType === 'EPS-TAI-BYTES' && raw.length >= 5) {
-    const plmn = decodePlmnBytes(raw, 0);
-    const tac = (raw[3] << 8) | raw[4];
-    return `${plmn}, TAC=${tac}`;
+  // EPS-TAI-BYTES: userLocationInfo field contains full EPSLocation packed binary
+  // (bitmap byte + variable TAI/ECGI/CGI blocks) — use same bitmap decoder as looksLikeEpsLoc
+  if (origChildType === 'EPS-TAI-BYTES' && raw.length >= 1) {
+    const bitmap = raw[0];
+    const parts = [];
+    let offset = 1;
+    const dp = decodePlmnBytes;
+    // CGI (bit7)
+    if (bitmap & 0x80) { if (offset+7<=raw.length) { parts.push(`CGI: ${dp(raw,offset)}, LAC=${(raw[offset+3]<<8)|raw[offset+4]}, CI=${(raw[offset+5]<<8)|raw[offset+6]}`); offset+=7; } }
+    // SAI (bit6)
+    if (bitmap & 0x40) { if (offset+7<=raw.length) { parts.push(`SAI: ${dp(raw,offset)}, LAC=${(raw[offset+3]<<8)|raw[offset+4]}, SAC=${(raw[offset+5]<<8)|raw[offset+6]}`); offset+=7; } }
+    // RAI (bit5)
+    if (bitmap & 0x20) { if (offset+6<=raw.length) { parts.push(`RAI: ${dp(raw,offset)}, LAC=${(raw[offset+3]<<8)|raw[offset+4]}, RAC=${raw[offset+5]}`); offset+=6; } }
+    // TAI (bit4): PLMN(3) + TAC(2)
+    if (bitmap & 0x10) { if (offset+5<=raw.length) { const tac=(raw[offset+3]<<8)|raw[offset+4]; parts.push(`TAI: ${dp(raw,offset)}, TAC=${tac}`); offset+=5; } }
+    // ECGI (bit3): PLMN(3) + ECI 28-bit
+    if (bitmap & 0x08) { if (offset+7<=raw.length) { const eci=((raw[offset+3]&0x0f)<<24)|(raw[offset+4]<<16)|(raw[offset+5]<<8)|raw[offset+6]; parts.push(`ECGI: ${dp(raw,offset)}, eNB-ID=${(eci>>8)&0xfffff}, Cell-ID=${eci&0xff}`); offset+=7; } }
+    if (parts.length) return parts.join('  |  ');
+    return `0x${Array.from(raw).map(b=>b.toString(16).padStart(2,'0')).join('')}`;
   }
 
-  // EPS-ECGI-BYTES: 7 bytes — PLMN-ID (3 B) + ECI (4 B, 28-bit: eNB-ID 20 bit + Cell-ID 8 bit)
-  if (origChildType === 'EPS-ECGI-BYTES' && raw.length >= 7) {
-    const plmn = decodePlmnBytes(raw, 0);
-    const eci = ((raw[3] & 0x0f) << 24) | (raw[4] << 16) | (raw[5] << 8) | raw[6];
-    const enbId = (eci >> 8) & 0xfffff;
-    const cellId = eci & 0xff;
-    return `${plmn}, eNB-ID=${enbId}, Cell-ID=${cellId}`;
-  }
-
-  // EPSLocation packed binary (3GPP TS 29.274 §8.21) — bitmap byte + TAI + ECGI blocks
-  // Also triggered for GsmGeoCoordinates with EPS bitmap flags (userLocationInfo inside GSMLocation)
-  const isEpsLocType = origChildType === 'EPSLocation';
+  // EPSLocation packed binary — only triggered for GsmGeoCoordinates with EPS bitmap flags
+  // (userLocationInfo inside GSMLocation in EPS IRI files — same ASN.1 type, different content)
   const looksLikeEpsLoc = origChildType === 'GsmGeoCoordinates' && raw.length >= 1 &&
     (raw[0] & 0x18) !== 0 &&
     raw[0] < 0x20;
-  if ((isEpsLocType || looksLikeEpsLoc) && raw.length >= 1) {
+  if (looksLikeEpsLoc && raw.length >= 1) {
     const bitmap = raw[0];
     const parts = [];
     let offset = 1;
@@ -779,9 +783,8 @@ const EXTRA_HINTS = {
   'GSMLocation,1':              'GsmGeoCoordinates',
   'GSMLocation,2':              'UtmCoordinates',
   // userLocationInfo [1] inside GSMLocation in EPS IRI files: decoded in scalarValue via bitmap heuristic
-  // EPSLocation children — packed binary fields, force scalar decoding via pseudo-types
+  // EPSLocation children — only userLocationInfo[1] gets packed binary decoding
   'EPSLocation,1':              'EPS-TAI-BYTES',
-  'EPSLocation,2':              'EPS-ECGI-BYTES',
   // Other IRIContents CHOICE members
   'UMTSIRI,0':                  'UmtsIRI-Parameters',
   'UMTSIRI,1':                  'UmtsIRIsContent',
@@ -889,7 +892,7 @@ function parseBer(buf, baseOffset, typeHint, tagMaps, depth) {
         }
       }
       const override=EXTRA_HINTS[`${typeHint},${t.tag}`];
-      if(override){childType=override;node.typeName=override;}
+      if(override){childType=override; node.typeName=override; node.origChildType=override;}
     }else if(t.cls===0){node.typeName=UNIV[t.tag]||`UNIV-${t.tag}`;}
 
     let recurseHint=childType;
@@ -917,7 +920,7 @@ function parseBer(buf, baseOffset, typeHint, tagMaps, depth) {
     // (fieldName regex was too broad: matched 'communicationIdentifier', 'extendedInterceptionPointID' etc.)
     const STRING_TYPES = new Set(['PrintableString','IA5String','UTF8String','VisibleString',
       'BMPString','GeneralizedTime','UTCTime','LawfulInterceptionIdentifier',
-      'EPS-TAI-BYTES','EPS-ECGI-BYTES','EPSLocation']);
+      'EPS-TAI-BYTES','EPS-ECGI-BYTES']);
     const forceScalar = t.cls===2 && t.cons && STRING_TYPES.has(node.origChildType);
 
     if(t.cons && !forceScalar){
