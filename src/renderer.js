@@ -417,6 +417,33 @@ function encodeLength(len) {
   const arr=[];let n=len;while(n>0){arr.unshift(n&0xff);n>>=8;}
   return [0x80|arr.length,...arr];
 }
+// Encode a (possibly 64-bit+) integer as a minimal-length, two's-complement,
+// big-endian BER INTEGER/ENUMERATED value. Accepts a BigInt so no precision is
+// lost for values above 2^53 (correlation numbers, CINs, sequence numbers …).
+function encodeBerInteger(v) {
+  if (v === 0n) return [0x00];
+  const bytes = [];
+  if (v > 0n) {
+    let n = v;
+    while (n > 0n) { bytes.unshift(Number(n & 0xffn)); n >>= 8n; }
+    if (bytes[0] & 0x80) bytes.unshift(0x00); // leading 0x00 keeps the value positive
+  } else {
+    let len = 1;
+    while (v < -(1n << BigInt(8 * len - 1))) len++;      // minimal signed byte length
+    let mod = (1n << BigInt(8 * len)) + v;               // two's complement
+    for (let i = len - 1; i >= 0; i--) { bytes[i] = Number(mod & 0xffn); mod >>= 8n; }
+  }
+  return bytes;
+}
+// Decode a signed BER INTEGER (raw byte array) to a BigInt display string
+// "<decimal>,  0x<raw-hex>" without the Number() precision loss.
+function berIntegerToDisplay(raw) {
+  let v = 0n;
+  for (const b of raw) v = (v << 8n) | BigInt(b);
+  if (raw.length && (raw[0] & 0x80)) v -= (1n << BigInt(raw.length * 8));
+  const hex = Array.from(raw).map(b => b.toString(16).padStart(2, '0')).join('');
+  return { value: v, text: `${v.toString()},  0x${hex}` };
+}
 function serializeNode(node) {
   if (node._deleted) return [];  // OPTIONAL node marked for removal — emit nothing
   let tagBytes;
@@ -1131,11 +1158,13 @@ function openEditDialog(node, row) {
           <span id="edit-type">BOOLEAN OPTIONAL</span>
         </div>
         <div id="edit-hint">
-          Dieses Feld ist <b>OPTIONAL</b>: Es existiert nur wenn TRUE.<br>
-          „Entfernen" löscht den Tag vollständig aus dem Stream.
+          <b>OPTIONAL</b>-Felder existieren i.d.R. nur wenn TRUE. „Entfernen" löscht
+          den Tag vollständig; „FALSE" schreibt einen expliziten <code>00</code>-Wert
+          (nur für Pflicht-BOOLEANs sinnvoll).
         </div>
         <select id="edit-bool-select" style="width:100%;padding:6px 8px;margin:8px 0;font-size:14px;background:var(--bg2);color:var(--fg);border:1px solid var(--border);border-radius:4px;">
-          <option value="true"   ${currentTrue  ? 'selected' : ''}>TRUE  (85 01 FF)</option>
+          <option value="true"   ${currentTrue  ? 'selected' : ''}>TRUE  (… 01 FF)</option>
+          <option value="false">FALSE  (… 01 00)</option>
           <option value="remove" ${!currentTrue ? 'selected' : ''}>Entfernen — OPTIONAL, Tag wird gelöscht</option>
         </select>
         <div id="edit-buttons">
@@ -1165,9 +1194,10 @@ function openEditDialog(node, row) {
         if (valCell) { valCell.textContent = '⟨entfernt⟩'; valCell.style.color = 'var(--orange)'; }
         statusLeft.textContent = `Removed: ${node.fieldName||node.tagLabel}`;
       } else {
-        node.rawValue = [0xff];
+        const isTrue = sel.value === 'true';
+        node.rawValue = [isTrue ? 0xff : 0x00];
         node._deleted = false;
-        node.displayValue = 'TRUE';
+        node.displayValue = isTrue ? 'TRUE' : 'FALSE';
         node._modified = true;
         hasChanges = true;
         updateTitle();
@@ -1175,7 +1205,7 @@ function openEditDialog(node, row) {
         row.style.textDecoration = '';
         row.classList.add('modified');
         const valCell = row.querySelector('.col-value');
-        if (valCell) { valCell.textContent = 'TRUE'; valCell.style.color = 'var(--orange)'; }
+        if (valCell) { valCell.textContent = node.displayValue; valCell.style.color = 'var(--orange)'; }
         statusLeft.textContent = `Modified: ${node.fieldName||node.tagLabel}`;
       }
       dlg.remove();
@@ -1303,27 +1333,34 @@ function isUnixTimestampNode(node) {
   return false;
 }
 
+// ASN.1 character-string types whose stored bytes ARE the text (edit as text).
+const STRING_TYPES = new Set([
+  'UTF8String','PrintableString','IA5String','VisibleString','BMPString',
+  'NumericString','GraphicString','GeneralString','UniversalString',
+  'TeletexString','VideotexString','ObjectDescriptor'
+]);
+
 function isTextPrimitive(node) {
-  // UNIVERSAL string/time tags
-  if (node.cls === 0 && [12,19,22,26,30,23,24].includes(node.tag)) return true;
-  // UNIVERSAL ENUMERATED — always numeric BER byte, never text
-  if (node.cls === 0 && node.tag === 10) return false;
-  // UNIVERSAL INTEGER — always numeric BER encoding, never text
-  if (node.cls === 0 && node.tag === 2) return false;
-  // Context-tagged INTEGER — numeric encoding
-  if (node.cls === 2 && node.origChildType === 'INTEGER') return false;
-  // Context-tagged ENUMERATED — numeric encoding (single BER byte)
+  // UNIVERSAL string / time tags → text
+  if (node.cls === 0 && [12,18,19,20,21,22,25,26,27,28,29,30,23,24].includes(node.tag)) return true;
+  // UNIVERSAL numeric / binary tags → never text
+  // 1=BOOLEAN 2=INTEGER 3=BIT STRING 6=OID 10=ENUMERATED
+  if (node.cls === 0 && [1,2,3,6,10].includes(node.tag)) return false;
+  // Context-tagged INTEGER / ENUMERATED → numeric, never text
+  if (node.cls === 2 && (node.origChildType === 'INTEGER' || node.origChildType === 'ENUMERATED')) return false;
   if (node.cls === 2 && node.origChildType && rendererEnumMaps[node.origChildType]) return false;
-  // Context-tagged ENUMERATED without known enum table — still numeric
-  if (node.cls === 2 && node.origChildType === 'ENUMERATED') return false;
-  // Check raw bytes: if all printable ASCII → treat as text
-  if (node.rawValue && node.rawValue.length > 0) {
-    const allPrintable = node.rawValue.every(b => b >= 0x20 && b <= 0x7e);
-    if (allPrintable) return true;
+  // Context-tagged known character-string type → text (even with non-ASCII UTF-8 bytes)
+  if (node.cls === 2 && STRING_TYPES.has(node.origChildType)) return true;
+  // Otherwise: treat as text ONLY when every byte is printable ASCII *and* the
+  // displayed value is the verbatim byte string. A decoded/derived display
+  // (IP "1.2.3.4", OID "1.3.6…", PLMN "MCC=…", BCD "+49…") never equals the raw
+  // ASCII, so those correctly fall through to the lossless hex editor instead of
+  // being re-encoded as UTF-8 of their human-readable form.
+  const raw = node.rawValue;
+  if (raw && raw.length > 0 && raw.every(b => b >= 0x20 && b <= 0x7e)) {
+    const asAscii = String.fromCharCode(...raw);
+    if (node.displayValue === asAscii) return true;
   }
-  // Fallback: displayValue looks like readable text (no leading 0x and not "n, 0xN" numeric form)
-  const s = node.displayValue;
-  if (typeof s === 'string' && !s.startsWith('0x') && !/^\d+,\s+0x/.test(s)) return true;
   return false;
 }
 
@@ -1346,19 +1383,19 @@ function applyEdit(node, inputVal, isHex, errDiv, _constraintWarned=false, setWa
                  (node.cls === 2 && (node.origChildType === 'ENUMERATED' ||
                    (node.origChildType && rendererEnumMaps[node.origChildType])));
   if (isEnum) {
-    // Accept numeric input directly
+    // Accept numeric input directly (ENUMERATED is encoded exactly like INTEGER).
     const numMatch = inputVal.trim().match(/^(\d+)$/);
     if (numMatch) {
-      const v = parseInt(numMatch[1], 10);
-      if (v < 0 || v > 127) { errDiv.textContent = 'ENUMERATED value must be 0–127'; return null; }
-      return [v];
+      const v = BigInt(numMatch[1]);
+      if (v < 0n) { errDiv.textContent = 'ENUMERATED value must be ≥ 0'; return null; }
+      return encodeBerInteger(v);
     }
     // Accept label name — look up in enum table
     const enumTable = node.origChildType ? rendererEnumMaps[node.origChildType] : null;
     if (enumTable) {
       const lowerInput = inputVal.trim().toLowerCase();
       for (const [numStr, label] of Object.entries(enumTable)) {
-        if (label.toLowerCase() === lowerInput) return [parseInt(numStr, 10)];
+        if (label.toLowerCase() === lowerInput) return encodeBerInteger(BigInt(numStr));
       }
     }
     errDiv.textContent = 'Enter a number (e.g. 1) or a label name (e.g. activation)';
@@ -1369,31 +1406,23 @@ function applyEdit(node, inputVal, isHex, errDiv, _constraintWarned=false, setWa
   const isUniversalInt = (node.cls === 0 && node.tag === 2);
   const isCtxInt = (node.cls === 2 && node.origChildType === 'INTEGER');
   if (isUniversalInt || (isCtxInt && !isUnixTimestampNode(node))) {
-    const clean = inputVal.trim().replace(/,.*$/, '').trim(); // strip ", 0x..." suffix if user pasted
+    const clean = inputVal.trim();
     let v;
-    if (/^-?\d+$/.test(clean)) v = parseInt(clean, 10);
-    else if (/^0x[0-9a-fA-F]+$/i.test(clean)) v = parseInt(clean, 16);
-    else { errDiv.textContent = 'Enter a decimal or hex (0x…) integer'; return null; }
-    // Encode as BER integer (big-endian, minimal length, signed)
-    if (v === 0) return [0x00];
-    const bytes = [];
-    let n = v < 0 ? BigInt(v) : BigInt(v);
-    if (v > 0) {
-      while (n > 0n) { bytes.unshift(Number(n & 0xffn)); n >>= 8n; }
-      if (bytes[0] & 0x80) bytes.unshift(0x00); // positive sign byte
-    } else {
-      // negative: two's complement minimal encoding
-      let pos = BigInt(-v);
-      while (pos > 0n) { bytes.unshift(Number(pos & 0xffn)); pos >>= 8n; }
-      // two's complement
-      let carry = 1;
-      for (let i = bytes.length-1; i >= 0; i--) {
-        const b = (~bytes[i] & 0xff) + carry;
-        bytes[i] = b & 0xff; carry = b >> 8;
+    try {
+      if (/^-?\d+$/.test(clean)) {
+        v = BigInt(clean);                                   // decimal, arbitrary size
+      } else if (/^-?0x[0-9a-fA-F]+$/i.test(clean)) {
+        v = clean.startsWith('-') ? -BigInt(clean.slice(1)) : BigInt(clean); // hex
+      } else {
+        errDiv.textContent = 'Enter a decimal or hex (0x…) integer — no thousands separators';
+        return null;
       }
-      if (!(bytes[0] & 0x80)) bytes.unshift(0xff); // negative sign byte
+    } catch {
+      errDiv.textContent = 'Invalid integer';
+      return null;
     }
-    return bytes;
+    // Encode as BER INTEGER (big-endian, minimal length, signed) — full precision.
+    return encodeBerInteger(v);
   }
 
   // For Unix timestamp INTEGER nodes: parse ISO date → Big-Endian 4-byte integer
@@ -1403,21 +1432,31 @@ function applyEdit(node, inputVal, isHex, errDiv, _constraintWarned=false, setWa
       errDiv.textContent = 'Invalid date — use: YYYY-MM-DD HH:MM:SSZ';
       return null;
     }
-    // Encode as Big-Endian, same byte length as original
-    const origLen = (node.rawValue && node.rawValue.length >= 4) ? node.rawValue.length : 4;
-    const bytes = [];
-    let v = sec;
-    for (let i = origLen - 1; i >= 0; i--) { bytes[i] = v & 0xff; v >>>= 8; }
-    return bytes;
+    // Encode as a proper signed BER INTEGER. This adds a leading 0x00 byte
+    // automatically for post-2038 timestamps (> 0x7FFFFFFF) so the value never
+    // flips negative, instead of blindly reusing the original byte width.
+    return encodeBerInteger(BigInt(sec));
   }
 
-  // For GeneralizedTime / UTCTime nodes: convert ISO-8601 input → ASN.1 GeneralizedTime string
-  const isGenTime = (node.cls === 0 && (node.tag === 24 || node.tag === 23)) ||
-                    (node.cls === 2 && (node.origChildType === 'GeneralizedTime' || node.origChildType === 'UTCTime'));
+  // For UTCTime nodes: 2-digit year, no fractional seconds → "YYMMDDHHMMSSZ"
+  const isUtcTime = (node.cls === 0 && node.tag === 23) ||
+                    (node.cls === 2 && node.origChildType === 'UTCTime');
+  if (isUtcTime) {
+    const asn1 = isoToUtcTime(inputVal.trim());
+    if (asn1 === null) {
+      errDiv.textContent = 'Invalid date — UTCTime: YYMMDDHHMMSSZ or YYYY-MM-DD HH:MM:SSZ';
+      return null;
+    }
+    return Array.from(new TextEncoder().encode(asn1));
+  }
+
+  // For GeneralizedTime nodes: 4-digit year, optional fraction → "YYYYMMDDHHMMSS[.mmm]Z"
+  const isGenTime = (node.cls === 0 && node.tag === 24) ||
+                    (node.cls === 2 && node.origChildType === 'GeneralizedTime');
   if (isGenTime) {
     const asn1 = isoToGeneralizedTime(inputVal.trim());
     if (asn1 === null) {
-      errDiv.textContent = 'Invalid date — use: YYYY-MM-DD HH:MM:SS[.mmm]Z or YYYYMMDDHHmmSS[.mmm]Z';
+      errDiv.textContent = 'Invalid date — GeneralizedTime: YYYY-MM-DD HH:MM:SS[.mmm]Z or YYYYMMDDHHmmSS[.mmm]Z';
       return null;
     }
     return Array.from(new TextEncoder().encode(asn1));
@@ -1480,6 +1519,28 @@ function isoToGeneralizedTime(s) {
 }
 
 /**
+ * Convert a human-readable date string to ASN.1 UTCTime format ("YYMMDDHHMMSSZ").
+ * UTCTime uses a TWO-digit year and does NOT allow fractional seconds.
+ * Accepts ISO-8601 ("2026-04-23 09:44:01Z"), 14-digit GeneralizedTime
+ * ("20260423094401Z") and already-correct UTCTime ("260423094401Z").
+ * Always emits UTC ("Z"). Returns null on parse failure.
+ */
+function isoToUtcTime(s) {
+  const t = s.trim();
+  // Already UTCTime: YYMMDDHHMM[SS][Z]
+  if (/^\d{10}Z?$/.test(t) || /^\d{12}Z?$/.test(t)) {
+    return t.replace(/Z?$/, 'Z');
+  }
+  // ISO-8601 with separators
+  let m = t.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?Z?$/);
+  // 14-digit GeneralizedTime form
+  if (!m) m = t.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(?:\.\d+)?Z?$/);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, sc] = m;
+  return `${y.slice(2)}${mo}${d}${h}${mi}${sc}Z`;
+}
+
+/**
  * Mirror of main.js decodeGeneralizedTime — converts ASN.1 GeneralizedTime string
  * (e.g. "20260423094401.608Z") to a human-readable form ("2026-04-23 09:44:01.608Z").
  * Also tolerates already-formatted ISO strings (pass-through).
@@ -1512,9 +1573,7 @@ function recomputeDisplayValue(node) {
 
   if (node.cls === 0) {
     if (node.tag === 2) { // INTEGER
-      let v=0n; for(const b of buf)v=(v<<8n)|BigInt(b);
-      if(buf[0]&0x80)v-=(1n<<BigInt(buf.length*8));
-      const vn=Number(v); return`${vn},  0x${vn.toString(16)}`;
+      return berIntegerToDisplay(raw).text; // full BigInt precision
     }
     if (node.tag === 10) { // ENUMERATED universal
       const v = raw[0];
@@ -1543,14 +1602,13 @@ function recomputeDisplayValue(node) {
 
   // Context-tagged INTEGER
   if (node.cls === 2 && node.origChildType === 'INTEGER') {
-    let v = 0n; for (const b of buf) v = (v << 8n) | BigInt(b);
-    if (buf.length > 0 && buf[0] & 0x80) v -= (1n << BigInt(buf.length * 8));
-    const vn = Number(v);
-    if (node.fieldName === 'seconds' && vn > 1000000000 && vn < 2147483647) {
-      const d = new Date(vn * 1000);
-      return `${d.toISOString().replace('T',' ').replace('.000Z','Z')}  (${vn}, 0x${vn.toString(16)})`;
+    const { value: v, text } = berIntegerToDisplay(raw);
+    // "seconds" Unix-timestamp fields: show a human-readable date too
+    if (node.fieldName === 'seconds' && v > 1000000000n && v < 2147483647n) {
+      const d = new Date(Number(v) * 1000);
+      return `${d.toISOString().replace('T',' ').replace('.000Z','Z')}  (${v.toString()}, 0x${Number(v).toString(16)})`;
     }
-    return `${vn},  0x${vn.toString(16)}`;
+    return text;
   }
 
   // Context-tagged GeneralizedTime / UTCTime

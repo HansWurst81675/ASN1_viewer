@@ -527,8 +527,8 @@ function scalarValue(cls, tag, raw, fieldName, origChildType) {
       let v = 0n;
       for (const b of raw) v = (v << 8n) | BigInt(b);
       if (raw[0] & 0x80) v -= (1n << BigInt(raw.length * 8));
-      const vn = Number(v);
-      return `${vn},  0x${vn.toString(16)}`;
+      const hex = Array.from(raw).map(b => b.toString(16).padStart(2, '0')).join('');
+      return `${v.toString()},  0x${hex}`;   // full BigInt precision
     }
     if (tag === 6) return decodeOID(raw);
     if (tag === 10) {  // ENUMERATED — look up by origChildType
@@ -568,13 +568,14 @@ function scalarValue(cls, tag, raw, fieldName, origChildType) {
       let v = 0n;
       for (const b of raw) v = (v << 8n) | BigInt(b);
       if (raw[0] & 0x80) v -= (1n << BigInt(raw.length * 8));
-      const vn = Number(v);
+      const hex = Array.from(raw).map(b => b.toString(16).padStart(2, '0')).join('');
       // seconds field: show as Unix timestamp + human-readable date
-      if (fieldName === 'seconds' && vn > 1000000000 && vn < 2000000000) {
-        const d = new Date(vn * 1000);
-        return `${d.toISOString().replace('T',' ').replace('.000Z','Z')}  (${vn}, 0x${vn.toString(16)})`;
+      // (range kept identical to the renderer so isUnixTimestampNode() agrees)
+      if (fieldName === 'seconds' && v > 1000000000n && v < 2147483647n) {
+        const d = new Date(Number(v) * 1000);
+        return `${d.toISOString().replace('T',' ').replace('.000Z','Z')}  (${v.toString()}, 0x${Number(v).toString(16)})`;
       }
-      return `${vn},  0x${vn.toString(16)}`;
+      return `${v.toString()},  0x${hex}`;
     } catch { /* fall through */ }
   }
 
