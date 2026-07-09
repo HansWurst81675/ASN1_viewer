@@ -256,6 +256,27 @@ Beim Start werden alle `*.asn` / `*.asn1`-Dateien aus `asn1_patched/` geladen un
 
 ---
 
+## Troubleshooting / FAQ
+
+### `npm run build:linux` (oder `build:win`) schlägt fehl mit `ValidationError: Invalid configuration object` / `configuration.win has an unknown property 'sign'` bzw. `'signingHashAlgorithms'`
+
+**Ursache:** electron-builder hat das Schema für `build.win` zwischen Versionen geändert. Die Felder `sign` und `signingHashAlgorithms` sind in aktuellen electron-builder-Versionen (getestet: 26.8.1) keine gültigen Properties mehr unter `build.win` in `package.json`.
+
+**Fix:** In `package.json` im Abschnitt `"build" → "win"` die beiden Felder entfernen:
+
+```jsonc
+"win": {
+  "target": "nsis",
+  "signingHashAlgorithms": ["sha256"],   // ← entfernen
+  "sign": false,                          // ← entfernen
+  ...
+}
+```
+
+Code-Signing ist in diesem Projekt ohnehin deaktiviert (siehe `CSC_IDENTITY_AUTO_DISCOVERY=false`), daher werden diese Felder nicht benötigt. Nach dem Entfernen erneut `npm run build:win` bzw. `npm run build:linux` ausführen.
+
+---
+
 ## Entwicklung (ohne Build)
 
 ```bash
