@@ -185,10 +185,30 @@ Rechtsklick auf ein `content [4]`-Feld in `sMS-Contents` → **📱 SMS dekodier
 ## Bearbeitung & Speichern
 
 - Geänderte Felder werden **orange** markiert; der Fenstertitel zeigt `*`.
-- **Save As** re-serialisiert den vollständigen Baum als korrektes BER mit aktualisierten Längenfeldern.
+- **Save As** re-serialisiert den vollständigen Baum als korrektes BER mit aktualisierten Längenfeldern (definite length).
 - **Export TXT** bietet zwei Formate:
   - **Format 1** — eingerückte Baumdarstellung
   - **Format 2** — tabellarisch mit Offset, Tag und Wert
+
+### Typgenaue Kodierung beim Speichern
+
+Beim Bearbeiten einzelner Werte wird die Eingabe abhängig vom ASN.1-Typ des Knotens korrekt kodiert:
+
+| Typ | Eingabe | Kodierung im Stream |
+|---|---|---|
+| `INTEGER` (universal & context) | Dezimal oder `0x…` Hex | Minimal-Length, big-endian, **signed** (two's complement). Volle **BigInt**-Präzision — auch 64-Bit-Werte und größer bleiben exakt. |
+| `ENUMERATED` | Zahl **oder** Label-Name | Wie INTEGER (X.690); Label wird über die Enum-Tabelle aufgelöst. |
+| `INTEGER` als Unix-Zeit (Feld `seconds`) | `YYYY-MM-DD HH:MM:SSZ` | Unix-Sekunden als signed INTEGER; ab 2038 (> `0x7FFFFFFF`) wird automatisch ein `00`-Vorzeichenbyte ergänzt. |
+| `GeneralizedTime` (Tag 24) | ISO-8601 oder `YYYYMMDDHHmmSS[.mmm]Z` | 4-stelliges Jahr, optionale Sekundenbruchteile. |
+| `UTCTime` (Tag 23) | ISO-8601 oder `YYMMDDHHMMSSZ` | **2-stelliges** Jahr, keine Sekundenbruchteile — nicht mehr fälschlich als GeneralizedTime. |
+| `BOOLEAN` | TRUE / FALSE / Entfernen | `FF` / `00` bzw. Tag wird entfernt (OPTIONAL). |
+| Strings (`UTF8String`, `IA5String`, …) | Text | UTF-8, mit Prüfung der `SIZE`-Constraint. |
+| Sonstige | Hex-Bytes | Rohbytes 1:1. |
+
+> **Dekodierte Binärfelder** (IPv4/IPv6, OID, BIT STRING, BCD-Rufnummern, PLMN) werden zwar
+> lesbar *angezeigt*, aber zum **Editieren bewusst als Hex** geöffnet — so ist das Speichern
+> garantiert verlustfrei. Komfortable typisierte Editoren (IP/OID/Rufnummer direkt eintippen)
+> sind für eine spätere Version vorgesehen.
 
 ---
 
@@ -246,6 +266,23 @@ npm start
 ---
 
 ## Changelog
+
+### v1.5.1 (2026-07-09)
+Schwerpunkt: Datenintegrität beim Editieren dekodierter Binärfelder + Tests.
+
+- **Keine Korruption dekodierter Binärfelder mehr** — Felder, die in der Anzeige „schön" dekodiert werden (IPv4/IPv6, OID, BIT STRING, BCD-Rufnummern `msISDN`/`callingPartyNumber` u.a., PLMN `MCC=…`), aber binär gespeichert sind, wurden beim Editieren als Text behandelt: der *Anzeige*-String wurde UTF-8-kodiert über die eigentlichen Rohbytes geschrieben (z.B. `192.168.0.1` → `31 39 32 …` statt `c0 a8 00 01`). Ursache war der aussehensbasierte Fallback in `isTextPrimitive()`. Neu: die Entscheidung Text-vs-Hex erfolgt nach ASN.1-Typ und Byte-Identität — ein Feld wird nur dann als Text editiert, wenn es ein bekannter Zeichenketten-Typ ist **oder** die Anzeige exakt den gespeicherten ASCII-Bytes entspricht. Alle übrigen Binärfelder landen im **verlustfreien Hex-Editor**. Echte Strings (inkl. UTF-8 mit Umlauten) und ETSI-`PrintableString`-Koordinaten bleiben normal als Text editierbar.
+- **Round-Trip-Testsuite** — Neues `test/roundtrip.test.js` (`npm test`) extrahiert die realen Funktionen direkt aus `src/renderer.js` und prüft: INTEGER-Encode↔Decode bis 128 Bit inkl. Vorzeichen/minimale Länge, BER-Längenkodierung, `serializeNode`-TLV-Aufbau, UTCTime- vs. GeneralizedTime-Format und die Text-vs-Hex-Klassifikation als Regressionsschutz gegen genau diese Korruptionsklasse. 41 Checks, exit 0 = grün.
+
+### v1.5.0 (2026-07-09)
+Schwerpunkt: korrektes Speicherformat für INTEGER- und Datums-Werte.
+
+- **INTEGER volle Präzision (BigInt)** — Ganzzahlen wurden beim Bearbeiten über `parseInt()` / `Number()` verarbeitet und dadurch ab 2⁵³ verfälscht (relevant für 64-Bit-Werte wie Correlation-Nummern, CINs, Sequenznummern). Ein Wert wie `9223372036854775807` wurde gerundet gespeichert. Fix: durchgängige **BigInt**-Verarbeitung in `applyEdit()` sowie in beiden Anzeige-Pfaden (`main.js scalarValue`, `renderer.js recomputeDisplayValue`). Neue Helfer `encodeBerInteger()` / `berIntegerToDisplay()`. Round-trip-getestet bis 128-Bit.
+- **UTCTime nicht mehr als GeneralizedTime** — `UTCTime`-Felder (Tag 23 sowie `origChildType='UTCTime'`, u.a. in `EN301040.asn`) wurden mit **4-stelligem** Jahr im GeneralizedTime-Format gespeichert (`YYYYMMDD…`), was externe Decoder ablehnen. UTCTime erhält jetzt korrekt ein **2-stelliges** Jahr ohne Sekundenbruchteile (`YYMMDDHHMMSSZ`). Neue Funktion `isoToUtcTime()`; `applyEdit()` verzweigt sauber zwischen UTCTime (Tag 23) und GeneralizedTime (Tag 24).
+- **Komma frisst keine Eingabe mehr** — Bisher wurde alles ab dem ersten Komma stillschweigend abgeschnitten (`replace(/,.*$/,'')`), sodass `1,000` als `1` gespeichert wurde. Jetzt werden Tausendertrennzeichen abgelehnt statt kommentarlos verworfen.
+- **Unix-Timestamp (Feld `seconds`)** — Kodierung erfolgt jetzt als sauberes signed INTEGER; ab 2038 (> `0x7FFFFFFF`) wird automatisch ein führendes `00`-Vorzeichenbyte gesetzt, statt die Original-Bytebreite blind wiederzuverwenden (verhinderte negative Timestamps). Der 32-Bit-`>>>`-Shift wurde entfernt.
+- **ENUMERATED ohne künstliche Grenze** — Die 0–127-Beschränkung ist entfernt; ENUMERATED wird wie INTEGER (X.690) kodiert. Label-Auflösung unverändert.
+- **BOOLEAN: FALSE wieder wählbar** — Für **Pflicht**-BOOLEANs (non-OPTIONAL) gibt es neben TRUE und Entfernen wieder eine explizite **FALSE**-Option (`00`). Für OPTIONAL-Felder bleibt „Entfernen" der semantisch korrekte Weg (siehe v1.4.build_56).
+- Anzeige-Bereich der `seconds`→Datum-Heuristik in `main.js` und `renderer.js` vereinheitlicht (`> 1e9 && < 2147483647`), damit `isUnixTimestampNode()` konsistent greift.
 
 ### v1.4.build_57 (2026-05-28)
 - **ENUMERATED-Edit-Bug behoben** — Beim Bearbeiten von ENUMERATED-Feldern (z.B. `notificationType`) wurde die Eingabe `"1"` fälschlicherweise als UTF-8-Byte `0x31` gespeichert statt als BER-Integer `0x01`. Ursache: `isTextPrimitive()` hielt den Anzeigetext `"modification ( 3, 0x3 )"` für einen Textstring (alle Zeichen druckbares ASCII). Fix: ENUMERATED und INTEGER werden jetzt explizit vom Textpfad ausgenommen.
