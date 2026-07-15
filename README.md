@@ -289,15 +289,20 @@ npm start
 
 ## Changelog
 
-### v1.5.59 (2026-07-15)
-Schwerpunkt: Bedienbarkeit — typisierter IP-Editor + lesbarer Dialog.
+> Versionsschema: `1.5.<Buildnummer>`. Die angezeigte Version stammt aus `app.getVersion()`
+> und damit aus der **root**-`package.json`.
 
-- **Typisierter IP-Editor** — Binäre IP-Felder (`iPBinaryAddress`, `IPv4Address`, `IPv6Address`) werden jetzt beim Editieren mit ihrer lesbaren Adresse vorbefüllt und akzeptieren direkte Eingabe: `192.168.0.1` bzw. IPv6 wie `2001:db8::1` (inkl. `::`-Kurzform). Die Eingabe wird korrekt in die 4- bzw. 16-Byte-Form kodiert — kein Hex mehr nötig. Ungültige Adressen werden abgelehnt, nichts wird stillschweigend falsch gespeichert.
-- **IP bleibt nach dem Editieren lesbar** — `recomputeDisplayValue()` dekodiert IP-Felder wieder in Punkt-/Doppelpunkt-Schreibweise, sodass die Anzeige nach einer Änderung `192.168.0.1` statt `0xc0a80001` zeigt.
-- **Lesbarer Editier-Dialog** — Typ- und Hinweiszeile im Bearbeiten-Popup nutzten `--text-muted` (`#454d5e`), was auf dunklem Grund kaum lesbar war. Jetzt ein deutlich helleres Grau (`#9aa4b8`).
-- **Tests** — `test/roundtrip.test.js` um IPv4/IPv6-Round-Trips, `::`-Expansion, Ablehnung ungültiger Adressen und die Abgrenzung `iPTextAddress` (bleibt Text) erweitert. Jetzt 52 Checks, exit 0 = grün.
+### v1.5.60 (2026-07-15)
+Schwerpunkt: Bedienbarkeit — typisierter IP-Editor, lesbarer Dialog, hellere Baumansicht.
 
-Hinweis: `iPTextAddress` (ETSI-Textvariante der IP) bleibt weiterhin ein normales Textfeld; nur die binäre `iPBinaryAddress` nutzt den neuen IP-Editor.
+- **Typisierter IP-Editor** — Binäre IP-Felder (`iPBinaryAddress`, `IPv4Address`, `IPv6Address`) werden beim Editieren mit ihrer lesbaren Adresse vorbefüllt und akzeptieren direkte Eingabe: `192.168.0.1` bzw. IPv6 wie `2001:db8::1` (inkl. `::`-Kurzform). Die Eingabe wird korrekt in die 4- bzw. 16-Byte-Form kodiert — kein Hex mehr nötig. Ungültige Adressen werden abgelehnt.
+- **IP bleibt nach dem Editieren lesbar** — `recomputeDisplayValue()` dekodiert IP-Felder wieder in Punkt-/Doppelpunkt-Schreibweise (`192.168.0.1` statt `0xc0a80001`).
+- **Lesbarer Editier-Dialog** — Typ- und Hinweiszeile nutzten `--text-muted` (`#454d5e`), auf dunklem Grund praktisch unsichtbar. Jetzt deutlich heller (`#c8cfdc`).
+- **Hellere Baumansicht** — `--text-muted` global von `#454d5e` auf `#8892a4` angehoben; damit sind u.a. die Größenspalte und Universal-Labels lesbar.
+- **`src/package.json` entfernt** — ungenutztes Duplikat seit v1.0. Electron liest ausschließlich die root-`package.json`; die Kopie war totes Gewicht und Quelle von Versions-Verwirrung.
+- **Tests** — `test/roundtrip.test.js` deckt zusätzlich IPv4/IPv6-Round-Trips, `::`-Expansion, ungültige Adressen und die Abgrenzung `iPTextAddress` (bleibt Text) ab. 52 Checks, exit 0 = grün.
+
+Hinweis: `iPTextAddress` (ETSI-Textvariante der IP) bleibt ein normales Textfeld; nur die binäre `iPBinaryAddress` nutzt den IP-Editor. OID/BIT STRING/BCD/PLMN werden weiterhin verlustfrei als Hex editiert.
 
 ### v1.5.1 (2026-07-09)
 Schwerpunkt: Datenintegrität beim Editieren dekodierter Binärfelder + Tests.
