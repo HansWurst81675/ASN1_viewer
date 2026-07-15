@@ -203,12 +203,13 @@ Beim Bearbeiten einzelner Werte wird die Eingabe abhängig vom ASN.1-Typ des Kno
 | `UTCTime` (Tag 23) | ISO-8601 oder `YYMMDDHHMMSSZ` | **2-stelliges** Jahr, keine Sekundenbruchteile — nicht mehr fälschlich als GeneralizedTime. |
 | `BOOLEAN` | TRUE / FALSE / Entfernen | `FF` / `00` bzw. Tag wird entfernt (OPTIONAL). |
 | Strings (`UTF8String`, `IA5String`, …) | Text | UTF-8, mit Prüfung der `SIZE`-Constraint. |
+| IP-Adresse (binär) | `192.168.0.1` / `2001:db8::1` | 4 bzw. 16 Bytes; direkte Eingabe der Adresse (seit v1.5.2). |
 | Sonstige | Hex-Bytes | Rohbytes 1:1. |
 
-> **Dekodierte Binärfelder** (IPv4/IPv6, OID, BIT STRING, BCD-Rufnummern, PLMN) werden zwar
-> lesbar *angezeigt*, aber zum **Editieren bewusst als Hex** geöffnet — so ist das Speichern
-> garantiert verlustfrei. Komfortable typisierte Editoren (IP/OID/Rufnummer direkt eintippen)
-> sind für eine spätere Version vorgesehen.
+> **Dekodierte Binärfelder:** IPv4/IPv6 (`iPBinaryAddress`) lassen sich seit v1.5.2 direkt als
+> Adresse eintippen. OID, BIT STRING, BCD-Rufnummern und PLMN werden weiterhin lesbar
+> *angezeigt*, aber zum **Editieren als Hex** geöffnet — so ist das Speichern garantiert
+> verlustfrei. Typisierte Editoren für OID/Rufnummer sind für eine spätere Version vorgesehen.
 
 ---
 
@@ -287,6 +288,16 @@ npm start
 ---
 
 ## Changelog
+
+### v1.5.59 (2026-07-15)
+Schwerpunkt: Bedienbarkeit — typisierter IP-Editor + lesbarer Dialog.
+
+- **Typisierter IP-Editor** — Binäre IP-Felder (`iPBinaryAddress`, `IPv4Address`, `IPv6Address`) werden jetzt beim Editieren mit ihrer lesbaren Adresse vorbefüllt und akzeptieren direkte Eingabe: `192.168.0.1` bzw. IPv6 wie `2001:db8::1` (inkl. `::`-Kurzform). Die Eingabe wird korrekt in die 4- bzw. 16-Byte-Form kodiert — kein Hex mehr nötig. Ungültige Adressen werden abgelehnt, nichts wird stillschweigend falsch gespeichert.
+- **IP bleibt nach dem Editieren lesbar** — `recomputeDisplayValue()` dekodiert IP-Felder wieder in Punkt-/Doppelpunkt-Schreibweise, sodass die Anzeige nach einer Änderung `192.168.0.1` statt `0xc0a80001` zeigt.
+- **Lesbarer Editier-Dialog** — Typ- und Hinweiszeile im Bearbeiten-Popup nutzten `--text-muted` (`#454d5e`), was auf dunklem Grund kaum lesbar war. Jetzt ein deutlich helleres Grau (`#9aa4b8`).
+- **Tests** — `test/roundtrip.test.js` um IPv4/IPv6-Round-Trips, `::`-Expansion, Ablehnung ungültiger Adressen und die Abgrenzung `iPTextAddress` (bleibt Text) erweitert. Jetzt 52 Checks, exit 0 = grün.
+
+Hinweis: `iPTextAddress` (ETSI-Textvariante der IP) bleibt weiterhin ein normales Textfeld; nur die binäre `iPBinaryAddress` nutzt den neuen IP-Editor.
 
 ### v1.5.1 (2026-07-09)
 Schwerpunkt: Datenintegrität beim Editieren dekodierter Binärfelder + Tests.
