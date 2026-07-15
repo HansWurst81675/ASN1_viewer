@@ -1224,7 +1224,8 @@ function openEditDialog(node, row) {
   const isInt  = !isEnum && (
                    (node.cls === 0 && node.tag === 2) ||
                    (node.cls === 2 && node.origChildType === 'INTEGER' && !isUnixTimestampNode(node)));
-  const isHex  = !isEnum && !isInt && node.rawValue && !isTextPrimitive(node) && !isUnixTimestampNode(node);
+  const isIp   = isIpField(node) !== false;
+  const isHex  = !isEnum && !isInt && !isIp && node.rawValue && !isTextPrimitive(node) && !isUnixTimestampNode(node);
   const isGenTime = (node.cls === 0 && (node.tag === 24 || node.tag === 23)) ||
                     (node.cls === 2 && (node.origChildType === 'GeneralizedTime' || node.origChildType === 'UTCTime'));
   const isUnixTs = isUnixTimestampNode(node);
@@ -1240,6 +1241,8 @@ function openEditDialog(node, row) {
     currentVal = String(node.displayValue ?? '').replace(/,\s*0x[0-9a-fA-F]+$/, '').trim();
   } else if (isHex) {
     currentVal = Array.from(node.rawValue).map(b => b.toString(16).padStart(2,'0')).join(' ');
+  } else if (isIp) {
+    currentVal = ipBytesToString(node.rawValue);
   } else if (isUnixTs) {
     currentVal = (node.displayValue ?? '').replace(/\s*\(.*\)\s*$/, '').trim();
   } else {
@@ -1256,6 +1259,7 @@ function openEditDialog(node, row) {
   const hintText = isEnum    ? `ENUMERATED — enter number or name${enumHint ? ': ' + enumHint : ''}`
                  : isInt     ? 'INTEGER — enter decimal or hex (0x…)'
                  : isHex     ? 'Hex bytes (space-separated)'
+                 : isIp      ? (isIpField(node) === 16 ? 'IP-Adresse (IPv6) — z.B. 2001:db8::1' : 'IP-Adresse (IPv4) — z.B. 192.168.0.1')
                  : isGenTime ? 'Date/Time: YYYY-MM-DD HH:MM:SS[.mmm]Z'
                  : isUnixTs  ? 'Date/Time: YYYY-MM-DD HH:MM:SSZ  (stored as Unix timestamp)'
                  :             'Text value';
@@ -1340,6 +1344,65 @@ const STRING_TYPES = new Set([
   'TeletexString','VideotexString','ObjectDescriptor'
 ]);
 
+// ── IP address helpers (iPBinaryAddress: 4 bytes = IPv4, 16 bytes = IPv6) ──────
+// Returns 4 or 16 (byte length) when the node is a binary IP field, else false.
+function isIpField(node) {
+  const raw = node.rawValue;
+  if (!raw) return false;
+  const fn = node.fieldName || '';
+  const oct = node.origChildType;
+  if (raw.length === 4 && (
+      /[iI][pP]v?4[Aa]ddress|[iI][pP][Bb]inary[Aa]ddress|[Dd]elivery[Ii][Pp][Aa]ddress/.test(fn) ||
+      oct === 'IPv4Address' || oct === 'IPAddress')) return 4;
+  if (raw.length === 16 && (
+      /[iI][pP]v?6[Aa]ddress|[iI][pP][Bb]inary[Aa]ddress/.test(fn) ||
+      oct === 'IPv6Address' || oct === 'IPAddress')) return 16;
+  return false;
+}
+// Raw bytes → readable IP string (mirrors the decoder in main.js).
+function ipBytesToString(raw) {
+  if (raw.length === 4) return raw.join('.');
+  if (raw.length === 16) {
+    const g = [];
+    for (let i = 0; i < 16; i += 2) g.push(((raw[i] << 8) | raw[i + 1]).toString(16).padStart(4, '0'));
+    return g.join(':');
+  }
+  return Array.from(raw).map(b => b.toString(16).padStart(2, '0')).join(' ');
+}
+// Readable IP string → raw bytes. Accepts dotted IPv4 and colon IPv6 (incl. "::").
+// Returns null on invalid input.
+function parseIpToBytes(s) {
+  s = s.trim();
+  const m = s.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const b = m.slice(1).map(Number);
+    return b.every(x => x >= 0 && x <= 255) ? b : null;
+  }
+  if (s.includes(':')) {
+    const parts = s.split('::');
+    if (parts.length > 2) return null;                       // at most one "::"
+    const head = parts[0] ? parts[0].split(':') : [];
+    const tail = parts.length === 2 ? (parts[1] ? parts[1].split(':') : []) : null;
+    let groups;
+    if (tail === null) {                                     // no "::" → need exactly 8 groups
+      groups = head;
+      if (groups.length !== 8) return null;
+    } else {                                                 // "::" expands to zero groups
+      const fill = 8 - head.length - tail.length;
+      if (fill < 1) return null;
+      groups = [...head, ...Array(fill).fill('0'), ...tail];
+    }
+    const bytes = [];
+    for (const grp of groups) {
+      if (!/^[0-9a-fA-F]{1,4}$/.test(grp)) return null;
+      const v = parseInt(grp, 16);
+      bytes.push(v >> 8, v & 0xff);
+    }
+    return bytes.length === 16 ? bytes : null;
+  }
+  return null;
+}
+
 function isTextPrimitive(node) {
   // UNIVERSAL string / time tags → text
   if (node.cls === 0 && [12,18,19,20,21,22,25,26,27,28,29,30,23,24].includes(node.tag)) return true;
@@ -1375,6 +1438,23 @@ function applyEdit(node, inputVal, isHex, errDiv, _constraintWarned=false, setWa
     }
     const bytes=[];
     for(let i=0;i<hexStr.length;i+=2) bytes.push(parseInt(hexStr.slice(i,i+2),16));
+    return bytes;
+  }
+
+  // Binary IP address (iPBinaryAddress): user types "192.168.0.1" or "2001:db8::1"
+  const ipLen = isIpField(node);
+  if (ipLen) {
+    const bytes = parseIpToBytes(inputVal.trim());
+    if (!bytes) {
+      errDiv.textContent = ipLen === 16
+        ? 'Ungültige IPv6-Adresse — z.B. 2001:db8::1'
+        : 'Ungültige IPv4-Adresse — z.B. 192.168.0.1';
+      return null;
+    }
+    if (bytes.length !== ipLen) {
+      errDiv.textContent = `Adresse muss ${ipLen} Bytes ergeben (IPv${ipLen === 16 ? 6 : 4})`;
+      return null;
+    }
     return bytes;
   }
 
@@ -1564,6 +1644,9 @@ function recomputeDisplayValue(node) {
   const raw = node.rawValue || [];
   const buf = new Uint8Array(raw);
   if (!raw.length) return node.tag === 5 ? 'NULL' : '';
+
+  // Binary IP address → readable dotted / colon notation
+  if (isIpField(node)) return ipBytesToString(raw);
 
   // BOOLEAN
   if ((node.cls === 0 && node.tag === 1) ||
