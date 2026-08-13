@@ -30,6 +30,50 @@ function asciiToBytes(str) {
   return out;
 }
 
+// UTF-8-Bytes → String (ohne Buffer, Sandbox-tauglich).
+function utf8Decode(raw) {
+  let s = '', i = 0;
+  while (i < raw.length) {
+    const b = raw[i++];
+    if (b < 0x80) s += String.fromCharCode(b);
+    else if (b >= 0xc0 && b < 0xe0) s += String.fromCharCode(((b & 0x1f) << 6) | (raw[i++] & 0x3f));
+    else if (b >= 0xe0 && b < 0xf0) s += String.fromCharCode(((b & 0x0f) << 12) | ((raw[i++] & 0x3f) << 6) | (raw[i++] & 0x3f));
+    else s += String.fromCodePoint(((b & 0x07) << 18) | ((raw[i++] & 0x3f) << 12) | ((raw[i++] & 0x3f) << 6) | (raw[i++] & 0x3f));
+  }
+  return s;
+}
+
+// Bytes → lesbare IP (4→Punkt-, 16→Doppelpunktnotation).
+function ipBytesToStr(raw) {
+  if (raw.length === 4) return raw.join('.');
+  if (raw.length === 16) {
+    const g = [];
+    for (let i = 0; i < 16; i += 2) g.push(((raw[i] << 8) | raw[i + 1]).toString(16).padStart(4, '0'));
+    return g.join(':');
+  }
+  return raw.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Signed BER-INTEGER-Bytes → Dezimalzeichenkette.
+function berIntToDecimal(raw) {
+  let v = 0n;
+  for (const b of raw) v = (v << 8n) | BigInt(b & 0xff);
+  if (raw.length && (raw[0] & 0x80)) v -= (1n << BigInt(raw.length * 8));
+  return v.toString();
+}
+
+// Aktuellen Feldwert als wieder-eingebbare Zeichenkette (für die Vorbelegung des Eingabefelds).
+// Passt exakt zum jeweiligen Parser in encodeValueForKind().
+function nodeEditValue(node, kind) {
+  const raw = node.rawValue || [];
+  if (kind === 'ipv4' || kind === 'ipv6') return ipBytesToStr(raw);
+  if (kind === 'int' || kind === 'enum') return berIntToDecimal(raw);
+  if (kind === 'bool') return raw[0] ? 'TRUE' : 'FALSE';
+  if (kind === 'string') return utf8Decode(raw);
+  if (kind === 'hex') return raw.map(b => b.toString(16).padStart(2, '0')).join(' ');
+  return '';
+}
+
 // BER-INTEGER-Kodierung (minimal, signed) — identisch zu encodeBerInteger in renderer.js.
 function encodeBerIntegerBatch(v) {
   if (v === 0n) return [0x00];
@@ -280,8 +324,9 @@ function collectFields(nodes) {
         const key = c.name + '|' + c.kind;
         if (!map.has(key)) {
           const sample = node.displayValue != null ? String(node.displayValue) : bytesToAscii(node.rawValue || []);
+          const editValue = TIME_KINDS.has(c.kind) ? '' : nodeEditValue(node, c.kind);
           map.set(key, {
-            name: c.name, kind: c.kind, count: 0, sample, order: order++,
+            name: c.name, kind: c.kind, count: 0, sample, editValue, order: order++,
             tagLabel: node.tagLabel || '', typeName: node.typeName || node.origChildType || '',
           });
         }
@@ -347,7 +392,8 @@ function applyRules(nodes, sels) {
 // In Node (main.js) exportieren; im Browser/Sandbox ignoriert.
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    bytesToAscii, asciiToBytes, encodeBerIntegerBatch, parseIpToBytesBatch,
+    bytesToAscii, asciiToBytes, utf8Decode, ipBytesToStr, berIntToDecimal, nodeEditValue,
+    encodeBerIntegerBatch, parseIpToBytesBatch,
     shiftGeneralizedTimeStr, shiftUtcTimeStr, shiftUnixSecondsBytes, deltaToMs,
     utf8Encode, encodeValueForKind, classifyEditableNode, collectFields,
     applyToTree, applyRules, TIME_KINDS, VALUE_KINDS, STRING_TYPES,

@@ -1337,7 +1337,7 @@ ipcMain.handle('batch-scan', async (_, dir) => {
         for (const f of fields) {
           const key = f.name + '|' + f.kind;
           if (!fieldMap.has(key)) fieldMap.set(key, {
-            name: f.name, kind: f.kind, count: 0, sample: f.sample, files: 0,
+            name: f.name, kind: f.kind, count: 0, sample: f.sample, editValue: f.editValue || '', files: 0,
             order: fieldMap.size, tagLabel: f.tagLabel || '', typeName: f.typeName || '',
           });
           const e = fieldMap.get(key);

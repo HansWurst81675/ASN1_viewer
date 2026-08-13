@@ -752,3 +752,10 @@ button { cursor: pointer; border: none; outline: none; }
 .batch-fld-meta { font-size: 11px; color: #c8cfdc; margin-top: 1px; }
 .batch-fld-sample { font-size: 11px; color: var(--green); margin-top: 1px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── Batch: Wert-Validierung ──────────────────────────────────────────────── */
+.batch-dim { color: var(--text-muted); font-weight: normal; }
+.batch-valstat { font-size: 11px; margin-top: 4px; min-height: 14px; font-family: inherit; }
+.batch-valstat.ok   { color: var(--green); }
+.batch-valstat.err  { color: var(--red, #e06c75); }
+.batch-valstat.warn { color: var(--yellow, #e5c07b); }

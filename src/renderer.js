@@ -2982,11 +2982,79 @@ function openBatchDialog() {
     } else {
       const { ph, hint } = batchValueHint(f.kind);
       opBox.innerHTML = `
-        <div class="batch-hint">Fester Wert für alle Dateien — ${hint}:</div>
-        <input id="batch-val" class="batch-select" type="text" spellcheck="false" placeholder="${ph}">`;
+        <div class="batch-hint">Fester Wert für alle Dateien — ${hint}
+          <span class="batch-dim">· vorbelegt mit dem aktuellen Wert der 1. Datei (markieren + kopieren möglich)</span>:</div>
+        <input id="batch-val" class="batch-select" type="text" spellcheck="false" placeholder="${ph}">
+        <div id="batch-val-status" class="batch-valstat"></div>`;
+      const inp = opBox.querySelector('#batch-val');
+      const status = opBox.querySelector('#batch-val-status');
+      inp.value = f.editValue != null ? f.editValue : '';   // Vorbelegung (nicht via innerHTML → keine Injektion)
+      const validateNow = () => {
+        buildErr.textContent = '';
+        const v = inp.value.trim();
+        if (!v) { status.textContent = '⚠ leer — bitte einen Wert eingeben'; status.className = 'batch-valstat warn'; return; }
+        const r = batchValidateValue(f.kind, v);
+        if (r.ok) {
+          status.textContent = `✓ gültig — ${r.bytes.length} Byte: ${hexShort(r.bytes)}`;
+          status.className = 'batch-valstat ok';
+        } else {
+          status.textContent = `✗ ${r.error}`;
+          status.className = 'batch-valstat err';
+        }
+      };
+      inp.addEventListener('input', validateNow);
+      validateNow();
     }
-    opBox.querySelectorAll('input,select').forEach(el => el.addEventListener('input', () => { buildErr.textContent = ''; }));
+    if (BATCH_TIME_KINDS.has(f.kind)) {
+      opBox.querySelectorAll('input,select').forEach(el => el.addEventListener('input', () => { buildErr.textContent = ''; }));
+    }
     addBtn.disabled = false;
+  }
+
+  // Kurzer Hex-Ausschnitt zur Bestätigung (max. 8 Byte).
+  function hexShort(bytes) {
+    const h = bytes.slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join(' ');
+    return bytes.length > 8 ? h + ' …' : h;
+  }
+
+  // Live-Validierung der Eingabe — spiegelt encodeValueForKind() aus batch.js.
+  // Gibt { ok:true, bytes } oder { error } zurück.
+  function batchValidateValue(kind, input) {
+    const s = String(input);
+    if (kind === 'ipv4' || kind === 'ipv6') {
+      const b = parseIpToBytes(s.trim());
+      if (!b) return { error: kind === 'ipv6'
+        ? 'Ungültige IPv6-Adresse — Doppelpunktnotation, z.B. 2001:db8::1'
+        : 'Ungültige IPv4-Adresse — Punktnotation mit „.", z.B. 127.0.0.1 (nicht „127 0 0 1")' };
+      const need = kind === 'ipv6' ? 16 : 4;
+      if (b.length !== need) return { error: `Es wird eine IPv${need === 16 ? 6 : 4}-Adresse (${need} Byte) erwartet` };
+      return { ok: true, bytes: b };
+    }
+    if (kind === 'int' || kind === 'enum') {
+      const c = s.trim();
+      let v;
+      try {
+        if (/^-?\d+$/.test(c)) v = BigInt(c);
+        else if (/^-?0x[0-9a-fA-F]+$/i.test(c)) v = c.startsWith('-') ? -BigInt(c.slice(1)) : BigInt(c);
+        else return { error: 'Ganzzahl erwartet — dezimal (z.B. 42) oder hex (0x2a)' };
+      } catch { return { error: 'Ungültige Zahl' }; }
+      if (kind === 'enum' && v < 0n) return { error: 'ENUMERATED muss ≥ 0 sein' };
+      return { ok: true, bytes: encodeBerInteger(v) };
+    }
+    if (kind === 'bool') {
+      const c = s.trim().toLowerCase();
+      if (['true', '1', 'ff', '0xff', 'wahr'].includes(c)) return { ok: true, bytes: [0xff] };
+      if (['false', '0', '00', '0x00', 'falsch'].includes(c)) return { ok: true, bytes: [0x00] };
+      return { error: 'TRUE oder FALSE (bzw. 1 / 0) erwartet' };
+    }
+    if (kind === 'hex') {
+      const h = s.replace(/\s+/g, '');
+      if (!/^[0-9a-fA-F]*$/.test(h) || h.length % 2 !== 0) return { error: 'Hex in Byte-Paaren, z.B. 30 31 32 oder 303132' };
+      const b = [];
+      for (let i = 0; i < h.length; i += 2) b.push(parseInt(h.slice(i, i + 2), 16));
+      return { ok: true, bytes: b };
+    }
+    return { ok: true, bytes: Array.from(new TextEncoder().encode(s)) };  // string
   }
 
   function readDelta() {
@@ -3054,6 +3122,8 @@ function openBatchDialog() {
     } else {
       const val = $('#batch-val')?.value.trim() ?? '';
       if (!val) { buildErr.textContent = 'Bitte einen Wert angeben.'; return; }
+      const chk = batchValidateValue(f.kind, val);
+      if (!chk.ok) { buildErr.textContent = 'Ungültiger Wert: ' + chk.error; return; }
       rules.push({ name: f.name, kind: f.kind, value: val, desc: `${f.name} = ${val}` });
     }
     buildErr.textContent = '';

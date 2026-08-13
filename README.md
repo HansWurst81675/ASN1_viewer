@@ -263,6 +263,12 @@ werden als **Regelliste** zusammengestellt und gemeinsam in einem Durchlauf ange
      - **BOOLEAN** → `TRUE` / `FALSE` (bzw. `1` / `0`).
      - **Text** (`UTF8String`, `IA5String`, `PrintableString`, …) → Text, als UTF-8 gespeichert.
      - **Rohbytes** (OID, BIT STRING, BCD, sonstige Binärfelder) → Hex-Bytes, 1:1 gesetzt.
+   - **Vorbelegung & Prüfung** — bei Wert-Feldern ist das Eingabefeld mit dem **aktuellen Wert
+     der 1. Datei** vorbelegt (markier- und kopierbar), sodass Format und Ausgangswert sofort
+     sichtbar sind. Beim Tippen prüft eine **Live-Kontrolle** die Eingabe und zeigt
+     `✓ gültig — N Byte: …` bzw. eine konkrete Fehlermeldung. Gerade bei IP-Adressen ist so
+     sofort erkennbar, ob die Schreibweise stimmt (`127.0.0.1` ✓ vs. `127 0 0 1` ✗). Ungültige
+     Werte lassen sich nicht als Regel hinzufügen.
    - **+ Regel hinzufügen** — die Regel erscheint in der Liste darunter und kann per **✕**
      wieder entfernt werden. Pro Feld ist eine Regel möglich.
 3. **Ausgabe-Ordner wählen** — die Ergebnisse werden dorthin geschrieben; die **Originale
@@ -369,6 +375,7 @@ Schwerpunkt: **Batch-Bearbeitung** — beliebige Felder in allen Dateien eines O
 - **Mehrere Regeln gleichzeitig** — pro Feld eine Regel zur Liste hinzufügen (z. B. Zeitstempel **und** IP **und** LIID/Text-String); alle Regeln werden in einem Durchlauf auf jede Datei angewendet. Bericht mit Summe je Regel und Status je Datei.
 - **Durchsuchbare Feldliste in BER-Struktur** — Felder erscheinen in **Dokumentreihenfolge** (nicht alphabetisch) mit sichtbaren **Labels** (Tag + Typ). Filtern per Suchtext (Name/Label/Beispielwert), per **Vorkommen** (alle / in >1 Datei / in allen Dateien) und per Checkbox „nur Zeit/IP". LI-spezifische Textfelder wie das **LIID** (`LawfulInterceptionIdentifier`) werden als Text erkannt und lassen sich einheitlich setzen.
 - **Nicht-BER-Dateien werden ignoriert** — `*.txt`, `*.zip` u. Ä. werden anhand der BER-Struktur erkannt, im Scan als „ignoriert" gezählt und nie angefasst.
+- **Vorbelegung & Live-Validierung** — Wert-Eingaben sind mit dem aktuellen Wert vorbelegt (kopierbar) und werden beim Tippen live geprüft (z. B. IP-Schreibweise mit/ohne Punkt); ungültige Werte lassen sich nicht hinzufügen.
 - **Zeitstempel-Delta** — Vorzeichen plus Tage/Stunden/Minuten/Sekunden; unterstützt `GeneralizedTime`, `UTCTime` (2-stelliges Jahr, Jahrhundert-Regel nach RFC 5280) und Unix-Sekunden-`INTEGER` (`seconds`, mit `00`-Vorzeichenbyte ab 2038). Sekundenbruchteile und `Z` bleiben erhalten.
 - **Trifft keine Regel in einer Datei, wird sie übersprungen** (kein Abbruch); greift nur ein Teil der Regeln, werden genau diese angewendet. Bericht listet je Datei *geändert* (mit Anzahl), *übersprungen* oder *Fehler*.
 - **Neue reine Logik in `src/batch.js`** (ohne electron-/DOM-Abhängigkeit) mit eigenem Testset `test/batch.test.js` (`npm test` führt Roundtrip- **und** Batch-Tests aus). Die Serialisierung nutzt denselben Pfad wie *Save As*.
