@@ -232,10 +232,16 @@ werden als **Regelliste** zusammengestellt und gemeinsam in einem Durchlauf ange
    Felder eingesammelt. Angezeigt wird, wie viele Dateien gefunden wurden und wie viele
    auswertbare Felder enthalten.
 2. **Änderungen zusammenstellen** — pro Feld eine Regel hinzufügen:
-   - **Feld wählen** — die Liste zeigt jedes Feld mit Art und Beispielwert, z. B.
+   - **Feld wählen** — die durchsuchbare Liste zeigt jedes Feld mit Art und Beispielwert, z. B.
      `timeStamp · Zeit · GeneralizedTime · in 42 Datei(en), z.B. 2024-01-01 12:00:00Z`.
      Kommt ein Feldname in mehreren Ausprägungen vor (z. B. `iPBinaryAddress` als IPv4 **und**
      IPv6), erscheint er als getrennte Einträge.
+     - **Suchfeld** — tippe einen Teil des Feldnamens **oder** eines Beispielwerts (z. B. eine
+       IP, ein Datum, „ParserType"), um die Liste einzugrenzen.
+     - **Checkbox „nur Zeit / IP"** — blendet alles außer Zeitstempel- und IP-Feldern aus. Sind
+       solche Felder vorhanden, ist sie nach dem Scan **automatisch aktiv**, damit lange Listen
+       (z. B. Log-/Fehlerdumps mit vielen Textfeldern) sofort auf die typischen Ziele
+       zusammenschrumpfen. Zum Bearbeiten anderer Felder einfach abwählen.
    - **Änderung angeben** (je nach Feldart):
      - **Zeitstempel** → **Delta** aus Vorzeichen (`+`/`−`) und Tagen, Stunden, Minuten und
        Sekunden. Jeder Wert wird um genau diesen Betrag verschoben; relative Abstände bleiben

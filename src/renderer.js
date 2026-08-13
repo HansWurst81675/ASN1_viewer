@@ -2836,9 +2836,15 @@ function openBatchDialog() {
       <div class="batch-field-block">
         <label class="batch-label">2 · Änderungen zusammenstellen — pro Feld eine Regel hinzufügen</label>
         <div class="batch-builder">
-          <select id="batch-field" class="batch-select" disabled>
+          <div class="batch-filter-row">
+            <input id="batch-filter" class="batch-select" type="text" spellcheck="false"
+                   placeholder="Feld suchen — Name oder Beispielwert …" disabled>
+            <label class="batch-check"><input type="checkbox" id="batch-only-ti"> nur Zeit / IP</label>
+          </div>
+          <select id="batch-field" class="batch-listbox" size="8" disabled>
             <option value="">— zuerst Ordner scannen —</option>
           </select>
+          <div id="batch-field-count" class="batch-hint"></div>
           <div id="batch-op" class="batch-op hidden"></div>
           <div class="batch-builder-actions">
             <button id="batch-add" class="batch-btn" disabled>+ Regel hinzufügen</button>
@@ -2868,6 +2874,9 @@ function openBatchDialog() {
   const inInfo   = $('#batch-in-info');
   const outInfo  = $('#batch-out-info');
   const fieldSel = $('#batch-field');
+  const filterInp= $('#batch-filter');
+  const onlyTi   = $('#batch-only-ti');
+  const fieldCnt = $('#batch-field-count');
   const opBox    = $('#batch-op');
   const addBtn   = $('#batch-add');
   const buildErr = $('#batch-build-err');
@@ -2887,6 +2896,32 @@ function openBatchDialog() {
   function builderField() {
     const i = fieldSel.value;
     return i === '' ? null : fields[Number(i)];
+  }
+
+  // Feldliste (Listbox) nach Suchtext + „nur Zeit/IP" neu aufbauen.
+  function rebuildFieldList() {
+    const q = (filterInp.value || '').trim().toLowerCase();
+    const tiOnly = onlyTi.checked;
+    const prev = fieldSel.value;
+    fieldSel.innerHTML = '';
+    let shown = 0;
+    fields.forEach((f, i) => {
+      if (tiOnly && !(BATCH_TIME_KINDS.has(f.kind) || f.kind === 'ipv4' || f.kind === 'ipv6')) return;
+      const label = BATCH_KIND_LABEL[f.kind] || f.kind;
+      const text = `${f.name}  ·  ${label}  ·  in ${f.files} Datei(en), z.B. ${f.sample}`;
+      if (q && !text.toLowerCase().includes(q)) return;
+      const o = document.createElement('option');
+      o.value = String(i);
+      o.textContent = text;
+      fieldSel.appendChild(o);
+      shown++;
+    });
+    // vorherige Auswahl beibehalten, falls noch sichtbar
+    if (prev !== '' && [...fieldSel.options].some(o => o.value === prev)) fieldSel.value = prev;
+    fieldCnt.textContent = fields.length
+      ? `${shown} von ${fields.length} Feldern` + (shown === 0 ? ' — Suche/Filter anpassen' : '')
+      : '';
+    renderOp();
   }
 
   // Operationsbereich je nach Feldart aufbauen (Zeit-Delta oder Wert-Eingabe).
@@ -2965,6 +3000,8 @@ function openBatchDialog() {
   }
 
   fieldSel.addEventListener('change', renderOp);
+  filterInp.addEventListener('input', rebuildFieldList);
+  onlyTi.addEventListener('change', rebuildFieldList);
 
   // Regel aus dem Builder übernehmen.
   addBtn.onclick = () => {
@@ -2999,25 +3036,21 @@ function openBatchDialog() {
     if (!res || !res.ok) { setErr(res?.error || 'Scan fehlgeschlagen.'); inInfo.textContent = dir; return; }
     fields = res.fields;
     inInfo.textContent = `${dir}  —  ${res.fileCount} Dateien, ${res.parsedCount} mit Feldern`;
-    fieldSel.innerHTML = '';
-    if (!fields.length) {
-      const o = document.createElement('option');
-      o.value = ''; o.textContent = '— keine editierbaren Felder gefunden —';
-      fieldSel.appendChild(o); fieldSel.disabled = true;
+    const has = fields.length > 0;
+    filterInp.disabled = !has;
+    onlyTi.disabled = !has;
+    fieldSel.disabled = !has;
+    if (!has) {
+      fieldSel.innerHTML = '<option value="">— keine editierbaren Felder gefunden —</option>';
+      fieldCnt.textContent = '';
     } else {
-      const head = document.createElement('option');
-      head.value = ''; head.textContent = '— Feld wählen —';
-      fieldSel.appendChild(head);
-      fields.forEach((f, i) => {
-        const o = document.createElement('option');
-        o.value = String(i);
-        const label = BATCH_KIND_LABEL[f.kind] || f.kind;
-        o.textContent = `${f.name}  ·  ${label}  ·  in ${f.files} Datei(en), z.B. ${f.sample}`;
-        fieldSel.appendChild(o);
-      });
-      fieldSel.disabled = false;
+      // Standard: sofort auf Zeit-/IP-Felder eindampfen, wenn es welche gibt
+      const hasTi = fields.some(f => BATCH_TIME_KINDS.has(f.kind) || f.kind === 'ipv4' || f.kind === 'ipv6');
+      onlyTi.checked = hasTi;
+      filterInp.value = '';
+      rebuildFieldList();
     }
-    outBtn.disabled = !fields.length;
+    outBtn.disabled = !has;
     opBox.classList.add('hidden');
     updateApplyState();
   };

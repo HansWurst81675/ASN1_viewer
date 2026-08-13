@@ -713,3 +713,21 @@ button { cursor: pointer; border: none; outline: none; }
   margin: 6px 0; padding: 6px 0; border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px;
 }
+
+/* ── Batch: durchsuchbare Feldliste ───────────────────────────────────────── */
+.batch-filter-row { display: flex; align-items: center; gap: 12px; }
+.batch-filter-row .batch-select { flex: 1; }
+.batch-check {
+  display: flex; align-items: center; gap: 5px; flex: none;
+  font-size: 12px; color: var(--text); white-space: nowrap; cursor: pointer;
+}
+.batch-listbox {
+  width: 100%; margin-top: 6px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px;
+  font-family: inherit; font-size: 12px; padding: 2px; outline: none;
+}
+.batch-listbox:focus { border-color: var(--accent); }
+.batch-listbox option { padding: 3px 6px; white-space: nowrap; }
+.batch-listbox option:checked { background: var(--sel-bg); color: var(--fg); }
+.batch-listbox:disabled { opacity: .5; }
