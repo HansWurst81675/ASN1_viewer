@@ -19,6 +19,11 @@ contextBridge.exposeInMainWorld('berApi', {
   parseBerFile:          (p)           => ipcRenderer.invoke('parse-ber-file', p),
   parseBerBuffer:        (buf, name)   => ipcRenderer.invoke('parse-ber-buffer', buf, name),
 
+  // Batch mode (Stapel-Bearbeitung mehrerer Dateien)
+  batchChooseDir:   (title)  => ipcRenderer.invoke('batch-choose-dir', title),
+  batchScan:        (dir)    => ipcRenderer.invoke('batch-scan', dir),
+  batchApply:       (opts)   => ipcRenderer.invoke('batch-apply', opts),
+
   // Recent files
   getRecentFiles:   ()             => ipcRenderer.invoke('get-recent-files'),
   clearRecentFiles: ()             => ipcRenderer.invoke('clear-recent-files'),

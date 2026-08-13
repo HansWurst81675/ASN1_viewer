@@ -68,10 +68,14 @@ chmod +x "dist/BER Viewer-x.x.x.AppImage"
 ber_viewer_electron/
 ├── package.json
 ├── asn1_patched/          ← 31 ASN.1-Schemadateien (neben package.json!)
+├── test/
+│   ├── roundtrip.test.js  ← Encode/Decode-Roundtrip (Einzel-Bearbeitung)
+│   └── batch.test.js      ← Tests der Batch-Logik (src/batch.js)
 └── src/
-    ├── main.js            ← Electron-Hauptprozess, BER-Parser, IPC
+    ├── main.js            ← Electron-Hauptprozess, BER-Parser, IPC (inkl. Batch-Handler)
+    ├── batch.js           ← Reine Batch-Logik: Feld-Erkennung, Zeit-Delta, IP setzen
     ├── preload.js         ← IPC-Bridge zwischen Main und Renderer
-    ├── renderer.js        ← UI, Tree-Rendering, Edit-Dialog, SMS-Decoder, SIP-Decoder
+    ├── renderer.js        ← UI, Tree-Rendering, Edit-Dialog, Batch-Dialog, SMS-/SIP-Decoder
     ├── index.html         ← Toolbar, Suchfeld, Baumansicht
     └── style.css          ← Dark Theme
 ```
@@ -106,6 +110,7 @@ Der Viewer erkennt den Dateityp automatisch anhand der ersten BER-Bytes und der 
 | **Save As** | `Ctrl+S` | Als BER-Datei speichern (re-serialisiert) |
 | **Export TXT** | — | Baum als Text exportieren (Format 1 oder 2) |
 | **Suche** | — | Feldname oder Wert filtern |
+| **⧉ Batch** | — | Mehrere Dateien eines Ordners gemeinsam bearbeiten (siehe unten) |
 
 ### Navigation
 
@@ -213,6 +218,46 @@ Beim Bearbeiten einzelner Werte wird die Eingabe abhängig vom ASN.1-Typ des Kno
 
 ---
 
+## Batch-Bearbeitung (mehrere Dateien)
+
+Über die Schaltfläche **⧉ Batch** in der Toolbar lässt sich **ein** Feld in **allen**
+BER-Dateien eines Ordners auf einmal ändern — ohne jede Datei einzeln öffnen zu müssen.
+Typische Anwendungsfälle: eine IP-Adresse einheitlich setzen oder alle Zeitstempel eines
+Feldes um einen festen Betrag verschieben.
+
+**Ablauf im Dialog:**
+
+1. **Eingabe-Ordner wählen** — alle Dateien im Ordner werden geparst und die vorhandenen
+   Zeit- und IP-Felder eingesammelt. Angezeigt wird, wie viele Dateien gefunden wurden und
+   wie viele passende Felder enthalten.
+2. **Feld auswählen** — die Auswahlliste zeigt jedes Feld mit Art und einem Beispielwert,
+   z. B. `timeStamp · Zeit · GeneralizedTime · in 42 Datei(en), z.B. 2024-01-01 12:00:00Z`.
+   Kommt ein Feldname in mehreren Ausprägungen vor (z. B. `iPBinaryAddress` als IPv4 **und**
+   IPv6), erscheint er als getrennte Einträge.
+3. **Änderung angeben:**
+   - **Zeitstempel** → **Delta** aus Vorzeichen (`+`/`−`) und Tagen, Stunden, Minuten und
+     Sekunden. Jeder Wert des gewählten Feldes wird um genau diesen Betrag verschoben;
+     die relativen Abstände bleiben erhalten. Unterstützt werden `GeneralizedTime`,
+     `UTCTime` (2-stelliges Jahr) und als Unix-Sekunden gespeicherte Zeitstempel (Feld
+     `seconds`). Sekundenbruchteile und ein evtl. vorhandenes `Z` bleiben erhalten.
+   - **IP-Adresse** → **fester neuer Wert** (`192.168.0.1` bzw. `2001:db8::1`), auf den das
+     Feld in allen Dateien gesetzt wird. Die Bytelänge muss zur Feldart passen (4 Byte IPv4
+     bzw. 16 Byte IPv6).
+4. **Ausgabe-Ordner wählen** — die Ergebnisse werden dorthin geschrieben; die **Originale
+   bleiben unangetastet**. Ein-/Ausgabe-Ordner müssen sich unterscheiden.
+5. **Anwenden** — anschließend zeigt ein Bericht pro Datei, ob sie geändert (mit Anzahl der
+   geänderten Werte), **übersprungen** (Feld nicht vorhanden) oder fehlerhaft war.
+
+> **Übersprungen statt Fehler:** Enthält eine Datei das gewählte Feld nicht, wird sie
+> unverändert übersprungen und im Bericht als solche ausgewiesen — der Lauf bricht nicht ab.
+> Nur tatsächlich geänderte Dateien werden in den Ausgabe-Ordner geschrieben.
+
+Die Kodierung erfolgt exakt wie beim Einzel-Speichern (siehe *Typgenaue Kodierung*): das
+gesamte BER wird mit neu berechneten Längenfeldern re-serialisiert. Die reine Batch-Logik
+liegt in `src/batch.js` und ist über `test/batch.test.js` abgedeckt.
+
+---
+
 ## ASN.1-Schema-Auflösung
 
 Beim Start werden alle `*.asn` / `*.asn1`-Dateien aus `asn1_patched/` geladen und zu Tag-Maps verarbeitet. Zusätzlich gibt es hartcodierte **virtuelle Typen** für Felder, die in der ASN.1 als anonyme Inline-SEQUENCEs definiert sind:
@@ -291,6 +336,15 @@ npm start
 
 > Versionsschema: `1.5.<Buildnummer>`. Die angezeigte Version stammt aus `app.getVersion()`
 > und damit aus der **root**-`package.json`.
+
+### v1.6.0 (2026-08-13)
+Schwerpunkt: **Batch-Bearbeitung** — ein Feld in allen Dateien eines Ordners auf einmal ändern.
+
+- **⧉ Batch-Dialog** (neue Toolbar-Schaltfläche) — Eingabe-Ordner scannen, **ein** Zeit- oder IP-Feld auswählen und in allen enthaltenen BER-Dateien gemeinsam ändern. Ergebnisse landen in einem **separaten Ausgabe-Ordner**; die Originale bleiben unangetastet.
+- **Zeitstempel per Delta verschieben** — Vorzeichen (`+`/`−`) plus Tage/Stunden/Minuten/Sekunden; jeder Wert des gewählten Feldes wird um denselben festen Betrag verschoben. Unterstützt `GeneralizedTime`, `UTCTime` (2-stelliges Jahr, Jahrhundert-Regel nach RFC 5280) und Unix-Sekunden-`INTEGER` (Feld `seconds`, mit `00`-Vorzeichenbyte ab 2038). Sekundenbruchteile und `Z` bleiben erhalten.
+- **IP-Adresse fest setzen** — ein IPv4-/IPv6-Feld (`iPBinaryAddress` etc.) wird in allen Dateien auf einen einheitlichen Wert gesetzt; die Bytelänge (4/16) wird geprüft.
+- **Fehlt das Feld in einer Datei, wird sie übersprungen** (kein Abbruch); der Bericht listet je Datei *geändert* (mit Anzahl), *übersprungen* oder *Fehler*.
+- **Neue reine Logik in `src/batch.js`** (ohne electron-/DOM-Abhängigkeit) mit eigenem Testset `test/batch.test.js` (`npm test` führt Roundtrip- **und** Batch-Tests aus). Die Serialisierung nutzt denselben Pfad wie *Save As*.
 
 ### v1.5.60 (2026-07-15)
 Schwerpunkt: Bedienbarkeit — typisierter IP-Editor, lesbarer Dialog, hellere Baumansicht.

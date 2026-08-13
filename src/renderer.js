@@ -287,6 +287,7 @@ document.getElementById('btn-collapse').addEventListener('click', collapseAll);
 document.getElementById('btn-search').addEventListener('click', searchNext);
 document.getElementById('btn-save').addEventListener('click', saveAs);
 document.getElementById('btn-export').addEventListener('click', exportTxt);
+document.getElementById('btn-batch').addEventListener('click', openBatchDialog);
 
 searchInput.addEventListener('keydown', e => { if(e.key==='Enter') searchNext(); });
 
@@ -2778,4 +2779,219 @@ function updateCompareStats() {
   statusLeft.textContent = total === 0
     ? '✓ Keine Unterschiede'
     : `Unterschiede: ${nVal} Wert  ${nStruct} Struktur  ${nLeft} nur links  ${nRight} nur rechts`;
+}
+
+// ── Batch-Bearbeitung: Dialog für mehrere Dateien in einem Ordner ─────────────
+const BATCH_KIND_LABEL = {
+  gtime:    'Zeit · GeneralizedTime',
+  utctime:  'Zeit · UTCTime',
+  unixtime: 'Zeit · Unix-Sekunden',
+  ipv4:     'IP-Adresse · IPv4',
+  ipv6:     'IP-Adresse · IPv6',
+};
+const BATCH_TIME_KINDS = new Set(['gtime', 'utctime', 'unixtime']);
+
+function openBatchDialog() {
+  const existing = document.getElementById('batch-dialog');
+  if (existing) existing.remove();
+
+  let inputDir = null;
+  let outputDir = null;
+  let fields = [];   // [{ name, kind, count, sample, files }]
+
+  const dlg = document.createElement('div');
+  dlg.id = 'batch-dialog';
+  dlg.innerHTML = `
+    <div id="edit-overlay"></div>
+    <div id="batch-box">
+      <div id="batch-title">⧉ Batch-Bearbeitung
+        <span id="batch-subtitle">mehrere Dateien in einem Ordner gemeinsam ändern</span>
+      </div>
+
+      <div class="batch-row">
+        <button id="batch-in-btn" class="batch-btn">1 · Eingabe-Ordner wählen …</button>
+        <span id="batch-in-info" class="batch-info">kein Ordner gewählt</span>
+      </div>
+
+      <div class="batch-field-block">
+        <label class="batch-label" for="batch-field">2 · Feld auswählen</label>
+        <select id="batch-field" class="batch-select" disabled>
+          <option value="">— zuerst Ordner scannen —</option>
+        </select>
+      </div>
+
+      <div id="batch-op" class="batch-op hidden"></div>
+
+      <div class="batch-row">
+        <button id="batch-out-btn" class="batch-btn" disabled>3 · Ausgabe-Ordner wählen …</button>
+        <span id="batch-out-info" class="batch-info">kein Ordner gewählt</span>
+      </div>
+
+      <div id="batch-error" class="batch-error"></div>
+      <div id="batch-report" class="batch-report hidden"></div>
+
+      <div id="batch-buttons">
+        <button id="batch-close" class="batch-cancel">Schließen</button>
+        <button id="batch-apply" class="batch-ok" disabled>Anwenden</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(dlg);
+
+  const $ = (sel) => dlg.querySelector(sel);
+  const inInfo   = $('#batch-in-info');
+  const outInfo  = $('#batch-out-info');
+  const fieldSel = $('#batch-field');
+  const opBox    = $('#batch-op');
+  const errDiv   = $('#batch-error');
+  const reportDiv= $('#batch-report');
+  const outBtn   = $('#batch-out-btn');
+  const applyBtn = $('#batch-apply');
+
+  const close = () => dlg.remove();
+  $('#batch-close').onclick = close;
+  $('#edit-overlay').onclick = close;
+  dlg.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+
+  const setErr = (msg) => { errDiv.textContent = msg || ''; };
+
+  function currentField() {
+    const key = fieldSel.value;
+    return fields.find(f => (f.name + ' ' + f.kind) === key) || null;
+  }
+
+  // Operationsbereich je nach Feldart (Zeit-Delta oder IP-Wert) aufbauen.
+  function renderOp() {
+    const f = currentField();
+    opBox.classList.toggle('hidden', !f);
+    if (!f) { updateApplyState(); return; }
+    if (BATCH_TIME_KINDS.has(f.kind)) {
+      opBox.innerHTML = `
+        <div class="batch-label">Zeitversatz (Delta) — jeder Wert dieses Feldes wird verschoben</div>
+        <div class="batch-delta">
+          <select id="batch-sign" class="batch-select batch-sign">
+            <option value="1">+ (später)</option>
+            <option value="-1">− (früher)</option>
+          </select>
+          <label class="batch-unit"><input id="batch-days"  type="number" min="0" value="0"> Tage</label>
+          <label class="batch-unit"><input id="batch-hours" type="number" min="0" value="0"> Std.</label>
+          <label class="batch-unit"><input id="batch-mins"  type="number" min="0" value="0"> Min.</label>
+          <label class="batch-unit"><input id="batch-secs"  type="number" min="0" value="0"> Sek.</label>
+        </div>
+        <div class="batch-hint">Beispiel: +5 Tage, +4 Std., +10 Min. verschiebt jeden Zeitstempel um denselben festen Betrag.</div>`;
+    } else {
+      const ph = f.kind === 'ipv6' ? '2001:db8::1' : '192.168.0.1';
+      opBox.innerHTML = `
+        <div class="batch-label">Neue IP-Adresse — dieses Feld wird in allen Dateien fest darauf gesetzt</div>
+        <input id="batch-ip" class="batch-select" type="text" spellcheck="false" placeholder="${ph}">
+        <div class="batch-hint">Format ${f.kind === 'ipv6' ? 'IPv6 (16 Byte), z.B. 2001:db8::1' : 'IPv4 (4 Byte), z.B. 192.168.0.1'}.</div>`;
+    }
+    opBox.querySelectorAll('input,select').forEach(el =>
+      el.addEventListener('input', () => { setErr(''); updateApplyState(); }));
+    updateApplyState();
+  }
+
+  function readDelta() {
+    const g = (id) => Math.max(0, parseInt($(id)?.value || '0', 10) || 0);
+    return {
+      sign: parseInt($('#batch-sign')?.value || '1', 10),
+      days: g('#batch-days'), hours: g('#batch-hours'),
+      minutes: g('#batch-mins'), seconds: g('#batch-secs'),
+    };
+  }
+  function deltaIsZero(d) { return !(d.days || d.hours || d.minutes || d.seconds); }
+
+  function updateApplyState() {
+    const f = currentField();
+    let ready = !!(f && inputDir && outputDir);
+    if (ready && BATCH_TIME_KINDS.has(f.kind)) ready = !deltaIsZero(readDelta());
+    if (ready && (f.kind === 'ipv4' || f.kind === 'ipv6')) ready = !!($('#batch-ip')?.value.trim());
+    applyBtn.disabled = !ready;
+  }
+
+  fieldSel.addEventListener('change', () => { setErr(''); renderOp(); });
+
+  // 1 · Eingabe-Ordner wählen und scannen.
+  $('#batch-in-btn').onclick = async () => {
+    setErr(''); reportDiv.classList.add('hidden');
+    const dir = await window.berApi.batchChooseDir('Eingabe-Ordner mit BER-Dateien wählen');
+    if (!dir) return;
+    inputDir = dir;
+    inInfo.textContent = 'scanne …';
+    const res = await window.berApi.batchScan(dir);
+    if (!res || !res.ok) { setErr(res?.error || 'Scan fehlgeschlagen.'); inInfo.textContent = dir; return; }
+    fields = res.fields;
+    inInfo.textContent = `${dir}  —  ${res.fileCount} Dateien, ${res.parsedCount} mit Feldern`;
+    // Feld-Dropdown befüllen
+    fieldSel.innerHTML = '';
+    if (!fields.length) {
+      const o = document.createElement('option');
+      o.value = ''; o.textContent = '— keine Zeit-/IP-Felder gefunden —';
+      fieldSel.appendChild(o); fieldSel.disabled = true;
+    } else {
+      const head = document.createElement('option');
+      head.value = ''; head.textContent = '— Feld wählen —';
+      fieldSel.appendChild(head);
+      for (const f of fields) {
+        const o = document.createElement('option');
+        o.value = f.name + ' ' + f.kind;
+        const label = BATCH_KIND_LABEL[f.kind] || f.kind;
+        o.textContent = `${f.name}  ·  ${label}  ·  in ${f.files} Datei(en), z.B. ${f.sample}`;
+        fieldSel.appendChild(o);
+      }
+      fieldSel.disabled = false;
+    }
+    outBtn.disabled = !fields.length;
+    opBox.classList.add('hidden');
+    updateApplyState();
+  };
+
+  // 3 · Ausgabe-Ordner wählen.
+  outBtn.onclick = async () => {
+    setErr('');
+    const dir = await window.berApi.batchChooseDir('Ausgabe-Ordner wählen (nicht der Eingabe-Ordner)');
+    if (!dir) return;
+    outputDir = dir;
+    outInfo.textContent = dir;
+    updateApplyState();
+  };
+
+  // Anwenden.
+  applyBtn.onclick = async () => {
+    const f = currentField();
+    if (!f) return;
+    setErr(''); reportDiv.classList.add('hidden');
+    const opts = { inputDir, outputDir, name: f.name, kind: f.kind };
+    if (BATCH_TIME_KINDS.has(f.kind)) opts.delta = readDelta();
+    else opts.ipValue = $('#batch-ip')?.value.trim();
+
+    applyBtn.disabled = true; applyBtn.textContent = 'Verarbeite …';
+    const res = await window.berApi.batchApply(opts);
+    applyBtn.textContent = 'Anwenden'; updateApplyState();
+    if (!res || !res.ok) { setErr(res?.error || 'Batch fehlgeschlagen.'); return; }
+
+    const changed = res.report.filter(r => r.status === 'changed');
+    const skipped = res.report.filter(r => r.status === 'skipped');
+    const failed  = res.report.filter(r => r.status === 'error');
+    let html = `<div class="batch-report-head">✓ ${res.changedFiles} Datei(en) geändert `
+             + `(${res.totalChanges} Werte) · ${skipped.length} übersprungen`
+             + (failed.length ? ` · <span class="batch-fail">${failed.length} Fehler</span>` : '')
+             + `</div><div class="batch-report-sub">Ausgabe: ${res.outputDir}</div>`;
+    html += '<div class="batch-report-list">';
+    for (const r of res.report) {
+      const icon = r.status === 'changed' ? '✓' : r.status === 'skipped' ? '–' : '✗';
+      const cls  = r.status === 'changed' ? 'ok' : r.status === 'skipped' ? 'skip' : 'fail';
+      const note = r.status === 'changed' ? `${r.changed} Wert(e)`
+                 : r.status === 'skipped' ? 'Feld nicht vorhanden'
+                 : (r.error || 'Fehler');
+      const line = document.createElement('div');
+      line.className = 'batch-report-line ' + cls;
+      line.textContent = `${icon} ${r.file} — ${note}`;
+      html += line.outerHTML;
+    }
+    html += '</div>';
+    reportDiv.innerHTML = html;
+    reportDiv.classList.remove('hidden');
+    statusLeft.textContent = `Batch: ${res.changedFiles} geändert, ${skipped.length} übersprungen`;
+  };
 }

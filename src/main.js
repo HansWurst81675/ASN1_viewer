@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const path = require('path');
 const fs   = require('fs');
+const batch = require('./batch');
 
 // Suppress harmless Chromium GPU-cache / disk-cache warnings on Windows
 // (Electron tries to move the cache to a locked temp dir — non-fatal)
@@ -1291,6 +1292,121 @@ ipcMain.handle('export-txt-fmt2', async (_, defaultPath, nodes) => {
     fs.writeFileSync(result.filePath, lines.join('\n') + '\n', 'utf8');
     return { ok: true, path: result.filePath };
   } catch(e) { return { ok: false, error: e.message }; }
+});
+
+// ── Batch-Bearbeitung (mehrere Dateien in einem Ordner) ───────────────────────
+
+// Reguläre Dateien eines Ordners auflisten (keine Unterordner, keine versteckten).
+function listBatchFiles(dir) {
+  return fs.readdirSync(dir, { withFileTypes: true })
+    .filter(d => d.isFile() && !d.name.startsWith('.'))
+    .map(d => d.name)
+    .sort();
+}
+
+// Ordner-Auswahldialog (Eingabe- bzw. Ausgabe-Ordner).
+ipcMain.handle('batch-choose-dir', async (_, title) => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: title || 'Ordner wählen',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (result.canceled || !result.filePaths.length) return null;
+  return result.filePaths[0];
+});
+
+// Ordner scannen: alle Dateien parsen und die editierbaren Zeit-/IP-Felder
+// sammeln (aggregiert über alle Dateien).
+ipcMain.handle('batch-scan', async (_, dir) => {
+  try {
+    if (!dir || !fs.existsSync(dir)) return { ok: false, error: 'Ordner nicht gefunden.' };
+    const names = listBatchFiles(dir);
+    const fieldMap = new Map();   // key → { name, kind, count, sample, files }
+    const parsed = [];            // erfolgreich geparste Dateien
+    const errors = [];            // { file, error }
+    for (const name of names) {
+      const full = path.join(dir, name);
+      try {
+        const buf = fs.readFileSync(full);
+        const typeHint = detectTypeHint(buf);
+        const nodes = parseBer(buf, 0, typeHint, tagMaps);
+        const fields = batch.collectFields(nodes);
+        if (!fields.length) continue;          // keine Zeit-/IP-Felder → uninteressant
+        parsed.push(name);
+        for (const f of fields) {
+          const key = f.name + ' ' + f.kind;
+          if (!fieldMap.has(key)) fieldMap.set(key, { name: f.name, kind: f.kind, count: 0, sample: f.sample, files: 0 });
+          const e = fieldMap.get(key);
+          e.count += f.count;
+          e.files += 1;
+        }
+      } catch (e) {
+        errors.push({ file: name, error: e.message });
+      }
+    }
+    const fields = Array.from(fieldMap.values())
+      .sort((a, b) => a.name.localeCompare(b.name) || a.kind.localeCompare(b.kind));
+    return { ok: true, dir, fileCount: names.length, parsedCount: parsed.length, fields, errors };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// Batch anwenden: gewähltes Feld in allen Dateien ändern und in den Ausgabe-Ordner
+// schreiben. Dateien ohne das Feld werden übersprungen (kein Fehler).
+// opts = { inputDir, outputDir, name, kind, delta?, ipValue? }
+ipcMain.handle('batch-apply', async (_, opts) => {
+  try {
+    const { inputDir, outputDir, name, kind } = opts || {};
+    if (!inputDir || !fs.existsSync(inputDir)) return { ok: false, error: 'Eingabe-Ordner nicht gefunden.' };
+    if (!outputDir) return { ok: false, error: 'Kein Ausgabe-Ordner gewählt.' };
+    if (!name || !kind) return { ok: false, error: 'Kein Feld gewählt.' };
+
+    // Auswahlobjekt für applyToTree vorbereiten + Eingaben validieren.
+    const sel = { name, kind };
+    if (batch.TIME_KINDS.has(kind)) {
+      const deltaMs = batch.deltaToMs(opts.delta || {});
+      if (!deltaMs) return { ok: false, error: 'Das Delta ist 0 — bitte einen Zeitversatz angeben.' };
+      sel.deltaMs = deltaMs;
+    } else if (kind === 'ipv4' || kind === 'ipv6') {
+      const bytes = batch.parseIpToBytesBatch(opts.ipValue || '');
+      if (!bytes) return { ok: false, error: 'Ungültige IP-Adresse.' };
+      const need = kind === 'ipv6' ? 16 : 4;
+      if (bytes.length !== need) return { ok: false, error: `Für dieses Feld wird eine IPv${need === 16 ? 6 : 4}-Adresse (${need} Bytes) erwartet.` };
+      sel.ipBytes = bytes;
+    } else {
+      return { ok: false, error: 'Unbekannte Feldart.' };
+    }
+
+    // Ausgabe-Ordner anlegen; Überschreiben des Eingabe-Ordners verhindern.
+    if (path.resolve(inputDir) === path.resolve(outputDir))
+      return { ok: false, error: 'Ausgabe-Ordner muss sich vom Eingabe-Ordner unterscheiden.' };
+    fs.mkdirSync(outputDir, { recursive: true });
+
+    const report = [];   // { file, status: 'changed'|'skipped'|'error', changed, error? }
+    let changedFiles = 0, totalChanges = 0;
+    for (const fname of listBatchFiles(inputDir)) {
+      const full = path.join(inputDir, fname);
+      try {
+        const buf = fs.readFileSync(full);
+        const typeHint = detectTypeHint(buf);
+        const nodes = parseBer(buf, 0, typeHint, tagMaps);
+        const changed = batch.applyToTree(nodes, sel);
+        if (changed === 0) {
+          report.push({ file: fname, status: 'skipped', changed: 0 });
+          continue;
+        }
+        const out = serializeNodes(nodes);
+        fs.writeFileSync(path.join(outputDir, fname), out);
+        report.push({ file: fname, status: 'changed', changed });
+        changedFiles++; totalChanges += changed;
+      } catch (e) {
+        report.push({ file: fname, status: 'error', changed: 0, error: e.message });
+      }
+    }
+    return { ok: true, outputDir, changedFiles, totalChanges, report };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 });
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
