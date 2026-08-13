@@ -220,37 +220,45 @@ Beim Bearbeiten einzelner Werte wird die Eingabe abhängig vom ASN.1-Typ des Kno
 
 ## Batch-Bearbeitung (mehrere Dateien)
 
-Über die Schaltfläche **⧉ Batch** in der Toolbar lässt sich **ein** Feld in **allen**
-BER-Dateien eines Ordners auf einmal ändern — ohne jede Datei einzeln öffnen zu müssen.
-Typische Anwendungsfälle: eine IP-Adresse einheitlich setzen oder alle Zeitstempel eines
-Feldes um einen festen Betrag verschieben.
+Über die Schaltfläche **⧉ Batch** in der Toolbar lassen sich in **allen** BER-Dateien eines
+Ordners ein oder **mehrere** Felder auf einmal ändern — ohne jede Datei einzeln öffnen zu
+müssen. **Jedes** editierbare Feld ist wählbar (nicht nur Zeit/IP): Zeitstempel werden per
+Delta verschoben, alle anderen Felder auf einen festen Wert gesetzt. Mehrere Änderungen
+werden als **Regelliste** zusammengestellt und gemeinsam in einem Durchlauf angewendet.
 
 **Ablauf im Dialog:**
 
-1. **Eingabe-Ordner wählen** — alle Dateien im Ordner werden geparst und die vorhandenen
-   Zeit- und IP-Felder eingesammelt. Angezeigt wird, wie viele Dateien gefunden wurden und
-   wie viele passende Felder enthalten.
-2. **Feld auswählen** — die Auswahlliste zeigt jedes Feld mit Art und einem Beispielwert,
-   z. B. `timeStamp · Zeit · GeneralizedTime · in 42 Datei(en), z.B. 2024-01-01 12:00:00Z`.
-   Kommt ein Feldname in mehreren Ausprägungen vor (z. B. `iPBinaryAddress` als IPv4 **und**
-   IPv6), erscheint er als getrennte Einträge.
-3. **Änderung angeben:**
-   - **Zeitstempel** → **Delta** aus Vorzeichen (`+`/`−`) und Tagen, Stunden, Minuten und
-     Sekunden. Jeder Wert des gewählten Feldes wird um genau diesen Betrag verschoben;
-     die relativen Abstände bleiben erhalten. Unterstützt werden `GeneralizedTime`,
-     `UTCTime` (2-stelliges Jahr) und als Unix-Sekunden gespeicherte Zeitstempel (Feld
-     `seconds`). Sekundenbruchteile und ein evtl. vorhandenes `Z` bleiben erhalten.
-   - **IP-Adresse** → **fester neuer Wert** (`192.168.0.1` bzw. `2001:db8::1`), auf den das
-     Feld in allen Dateien gesetzt wird. Die Bytelänge muss zur Feldart passen (4 Byte IPv4
-     bzw. 16 Byte IPv6).
-4. **Ausgabe-Ordner wählen** — die Ergebnisse werden dorthin geschrieben; die **Originale
+1. **Eingabe-Ordner wählen** — alle Dateien im Ordner werden geparst und ihre editierbaren
+   Felder eingesammelt. Angezeigt wird, wie viele Dateien gefunden wurden und wie viele
+   auswertbare Felder enthalten.
+2. **Änderungen zusammenstellen** — pro Feld eine Regel hinzufügen:
+   - **Feld wählen** — die Liste zeigt jedes Feld mit Art und Beispielwert, z. B.
+     `timeStamp · Zeit · GeneralizedTime · in 42 Datei(en), z.B. 2024-01-01 12:00:00Z`.
+     Kommt ein Feldname in mehreren Ausprägungen vor (z. B. `iPBinaryAddress` als IPv4 **und**
+     IPv6), erscheint er als getrennte Einträge.
+   - **Änderung angeben** (je nach Feldart):
+     - **Zeitstempel** → **Delta** aus Vorzeichen (`+`/`−`) und Tagen, Stunden, Minuten und
+       Sekunden. Jeder Wert wird um genau diesen Betrag verschoben; relative Abstände bleiben
+       erhalten. Unterstützt `GeneralizedTime`, `UTCTime` (2-stelliges Jahr) und Unix-Sekunden
+       (`seconds`). Sekundenbruchteile und `Z` bleiben erhalten.
+     - **IP-Adresse** → fester Wert (`192.168.0.1` bzw. `2001:db8::1`), Bytelänge passend zur
+       Art (4/16).
+     - **INTEGER / ENUMERATED** → Zahl (dezimal oder `0x…`); als signed BER-INTEGER kodiert.
+     - **BOOLEAN** → `TRUE` / `FALSE` (bzw. `1` / `0`).
+     - **Text** (`UTF8String`, `IA5String`, `PrintableString`, …) → Text, als UTF-8 gespeichert.
+     - **Rohbytes** (OID, BIT STRING, BCD, sonstige Binärfelder) → Hex-Bytes, 1:1 gesetzt.
+   - **+ Regel hinzufügen** — die Regel erscheint in der Liste darunter und kann per **✕**
+     wieder entfernt werden. Pro Feld ist eine Regel möglich.
+3. **Ausgabe-Ordner wählen** — die Ergebnisse werden dorthin geschrieben; die **Originale
    bleiben unangetastet**. Ein-/Ausgabe-Ordner müssen sich unterscheiden.
-5. **Anwenden** — anschließend zeigt ein Bericht pro Datei, ob sie geändert (mit Anzahl der
-   geänderten Werte), **übersprungen** (Feld nicht vorhanden) oder fehlerhaft war.
+4. **Anwenden** — alle Regeln werden gemeinsam auf jede Datei angewendet. Ein Bericht zeigt
+   je Regel die Gesamtzahl geänderter Werte und je Datei, ob sie geändert (mit Anzahl),
+   **übersprungen** (keine Regel getroffen) oder fehlerhaft war.
 
-> **Übersprungen statt Fehler:** Enthält eine Datei das gewählte Feld nicht, wird sie
-> unverändert übersprungen und im Bericht als solche ausgewiesen — der Lauf bricht nicht ab.
-> Nur tatsächlich geänderte Dateien werden in den Ausgabe-Ordner geschrieben.
+> **Übersprungen statt Fehler:** Trifft in einer Datei **keine** der Regeln (Feld fehlt), wird
+> sie unverändert übersprungen und im Bericht als solche ausgewiesen — der Lauf bricht nicht
+> ab. Nur tatsächlich geänderte Dateien werden in den Ausgabe-Ordner geschrieben. Greift nur
+> ein Teil der Regeln, werden genau diese angewendet.
 
 Die Kodierung erfolgt exakt wie beim Einzel-Speichern (siehe *Typgenaue Kodierung*): das
 gesamte BER wird mit neu berechneten Längenfeldern re-serialisiert. Die reine Batch-Logik
@@ -338,12 +346,13 @@ npm start
 > und damit aus der **root**-`package.json`.
 
 ### v1.6.0 (2026-08-13)
-Schwerpunkt: **Batch-Bearbeitung** — ein Feld in allen Dateien eines Ordners auf einmal ändern.
+Schwerpunkt: **Batch-Bearbeitung** — beliebige Felder in allen Dateien eines Ordners auf einmal ändern.
 
-- **⧉ Batch-Dialog** (neue Toolbar-Schaltfläche) — Eingabe-Ordner scannen, **ein** Zeit- oder IP-Feld auswählen und in allen enthaltenen BER-Dateien gemeinsam ändern. Ergebnisse landen in einem **separaten Ausgabe-Ordner**; die Originale bleiben unangetastet.
-- **Zeitstempel per Delta verschieben** — Vorzeichen (`+`/`−`) plus Tage/Stunden/Minuten/Sekunden; jeder Wert des gewählten Feldes wird um denselben festen Betrag verschoben. Unterstützt `GeneralizedTime`, `UTCTime` (2-stelliges Jahr, Jahrhundert-Regel nach RFC 5280) und Unix-Sekunden-`INTEGER` (Feld `seconds`, mit `00`-Vorzeichenbyte ab 2038). Sekundenbruchteile und `Z` bleiben erhalten.
-- **IP-Adresse fest setzen** — ein IPv4-/IPv6-Feld (`iPBinaryAddress` etc.) wird in allen Dateien auf einen einheitlichen Wert gesetzt; die Bytelänge (4/16) wird geprüft.
-- **Fehlt das Feld in einer Datei, wird sie übersprungen** (kein Abbruch); der Bericht listet je Datei *geändert* (mit Anzahl), *übersprungen* oder *Fehler*.
+- **⧉ Batch-Dialog** (neue Toolbar-Schaltfläche) — Eingabe-Ordner scannen und in allen enthaltenen BER-Dateien gemeinsam bearbeiten. Ergebnisse landen in einem **separaten Ausgabe-Ordner**; die Originale bleiben unangetastet.
+- **Alle Feldarten wählbar** — nicht nur Zeit/IP: Zeitstempel werden per **Delta** verschoben; `INTEGER`/`ENUMERATED`, `BOOLEAN`, Text-Strings, IP-Adressen und beliebige Rohbytes (Hex) werden auf einen **festen Wert** gesetzt. Kodierung identisch zum Einzel-Editor.
+- **Mehrere Regeln gleichzeitig** — pro Feld eine Regel zur Liste hinzufügen (z. B. Zeitstempel **und** IP **und** Text-String); alle Regeln werden in einem Durchlauf auf jede Datei angewendet. Bericht mit Summe je Regel und Status je Datei.
+- **Zeitstempel-Delta** — Vorzeichen plus Tage/Stunden/Minuten/Sekunden; unterstützt `GeneralizedTime`, `UTCTime` (2-stelliges Jahr, Jahrhundert-Regel nach RFC 5280) und Unix-Sekunden-`INTEGER` (`seconds`, mit `00`-Vorzeichenbyte ab 2038). Sekundenbruchteile und `Z` bleiben erhalten.
+- **Trifft keine Regel in einer Datei, wird sie übersprungen** (kein Abbruch); greift nur ein Teil der Regeln, werden genau diese angewendet. Bericht listet je Datei *geändert* (mit Anzahl), *übersprungen* oder *Fehler*.
 - **Neue reine Logik in `src/batch.js`** (ohne electron-/DOM-Abhängigkeit) mit eigenem Testset `test/batch.test.js` (`npm test` führt Roundtrip- **und** Batch-Tests aus). Die Serialisierung nutzt denselben Pfad wie *Save As*.
 
 ### v1.5.60 (2026-07-15)

@@ -2781,6 +2781,7 @@ function updateCompareStats() {
     : `Unterschiede: ${nVal} Wert  ${nStruct} Struktur  ${nLeft} nur links  ${nRight} nur rechts`;
 }
 
+
 // ── Batch-Bearbeitung: Dialog für mehrere Dateien in einem Ordner ─────────────
 const BATCH_KIND_LABEL = {
   gtime:    'Zeit · GeneralizedTime',
@@ -2788,8 +2789,26 @@ const BATCH_KIND_LABEL = {
   unixtime: 'Zeit · Unix-Sekunden',
   ipv4:     'IP-Adresse · IPv4',
   ipv6:     'IP-Adresse · IPv6',
+  int:      'Zahl · INTEGER',
+  enum:     'Zahl · ENUMERATED',
+  bool:     'BOOLEAN',
+  string:   'Text',
+  hex:      'Rohbytes · Hex',
 };
 const BATCH_TIME_KINDS = new Set(['gtime', 'utctime', 'unixtime']);
+
+// Platzhalter/Hinweis je Wert-Feldart (Nicht-Zeit).
+function batchValueHint(kind) {
+  switch (kind) {
+    case 'ipv4':   return { ph: '192.168.0.1',  hint: 'IPv4-Adresse (4 Byte)' };
+    case 'ipv6':   return { ph: '2001:db8::1',  hint: 'IPv6-Adresse (16 Byte)' };
+    case 'int':    return { ph: '42 oder 0x2a', hint: 'Ganzzahl — dezimal oder 0x… (signed BER-INTEGER)' };
+    case 'enum':   return { ph: '1',            hint: 'ENUMERATED — Zahlenwert' };
+    case 'bool':   return { ph: 'TRUE',         hint: 'TRUE / FALSE (oder 1 / 0)' };
+    case 'hex':    return { ph: '30 31 32',     hint: 'Hex-Bytes (paarweise) — wird 1:1 gesetzt' };
+    default:       return { ph: 'Text',         hint: 'Text — wird als UTF-8 gespeichert' };
+  }
+}
 
 function openBatchDialog() {
   const existing = document.getElementById('batch-dialog');
@@ -2798,6 +2817,7 @@ function openBatchDialog() {
   let inputDir = null;
   let outputDir = null;
   let fields = [];   // [{ name, kind, count, sample, files }]
+  const rules = [];  // [{ name, kind, delta?|value?, desc }]
 
   const dlg = document.createElement('div');
   dlg.id = 'batch-dialog';
@@ -2814,13 +2834,19 @@ function openBatchDialog() {
       </div>
 
       <div class="batch-field-block">
-        <label class="batch-label" for="batch-field">2 · Feld auswählen</label>
-        <select id="batch-field" class="batch-select" disabled>
-          <option value="">— zuerst Ordner scannen —</option>
-        </select>
+        <label class="batch-label">2 · Änderungen zusammenstellen — pro Feld eine Regel hinzufügen</label>
+        <div class="batch-builder">
+          <select id="batch-field" class="batch-select" disabled>
+            <option value="">— zuerst Ordner scannen —</option>
+          </select>
+          <div id="batch-op" class="batch-op hidden"></div>
+          <div class="batch-builder-actions">
+            <button id="batch-add" class="batch-btn" disabled>+ Regel hinzufügen</button>
+            <span id="batch-build-err" class="batch-error"></span>
+          </div>
+        </div>
+        <div id="batch-rules" class="batch-rules"></div>
       </div>
-
-      <div id="batch-op" class="batch-op hidden"></div>
 
       <div class="batch-row">
         <button id="batch-out-btn" class="batch-btn" disabled>3 · Ausgabe-Ordner wählen …</button>
@@ -2843,6 +2869,9 @@ function openBatchDialog() {
   const outInfo  = $('#batch-out-info');
   const fieldSel = $('#batch-field');
   const opBox    = $('#batch-op');
+  const addBtn   = $('#batch-add');
+  const buildErr = $('#batch-build-err');
+  const rulesBox = $('#batch-rules');
   const errDiv   = $('#batch-error');
   const reportDiv= $('#batch-report');
   const outBtn   = $('#batch-out-btn');
@@ -2853,21 +2882,22 @@ function openBatchDialog() {
   $('#edit-overlay').onclick = close;
   dlg.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
 
-  const setErr = (msg) => { errDiv.textContent = msg || ''; };
+  const setErr = (m) => { errDiv.textContent = m || ''; };
 
-  function currentField() {
-    const key = fieldSel.value;
-    return fields.find(f => (f.name + ' ' + f.kind) === key) || null;
+  function builderField() {
+    const i = fieldSel.value;
+    return i === '' ? null : fields[Number(i)];
   }
 
-  // Operationsbereich je nach Feldart (Zeit-Delta oder IP-Wert) aufbauen.
+  // Operationsbereich je nach Feldart aufbauen (Zeit-Delta oder Wert-Eingabe).
   function renderOp() {
-    const f = currentField();
+    const f = builderField();
     opBox.classList.toggle('hidden', !f);
-    if (!f) { updateApplyState(); return; }
+    buildErr.textContent = '';
+    if (!f) { addBtn.disabled = true; return; }
     if (BATCH_TIME_KINDS.has(f.kind)) {
       opBox.innerHTML = `
-        <div class="batch-label">Zeitversatz (Delta) — jeder Wert dieses Feldes wird verschoben</div>
+        <div class="batch-hint">Zeitversatz (Delta) — jeder Wert dieses Feldes wird verschoben:</div>
         <div class="batch-delta">
           <select id="batch-sign" class="batch-select batch-sign">
             <option value="1">+ (später)</option>
@@ -2877,39 +2907,86 @@ function openBatchDialog() {
           <label class="batch-unit"><input id="batch-hours" type="number" min="0" value="0"> Std.</label>
           <label class="batch-unit"><input id="batch-mins"  type="number" min="0" value="0"> Min.</label>
           <label class="batch-unit"><input id="batch-secs"  type="number" min="0" value="0"> Sek.</label>
-        </div>
-        <div class="batch-hint">Beispiel: +5 Tage, +4 Std., +10 Min. verschiebt jeden Zeitstempel um denselben festen Betrag.</div>`;
+        </div>`;
     } else {
-      const ph = f.kind === 'ipv6' ? '2001:db8::1' : '192.168.0.1';
+      const { ph, hint } = batchValueHint(f.kind);
       opBox.innerHTML = `
-        <div class="batch-label">Neue IP-Adresse — dieses Feld wird in allen Dateien fest darauf gesetzt</div>
-        <input id="batch-ip" class="batch-select" type="text" spellcheck="false" placeholder="${ph}">
-        <div class="batch-hint">Format ${f.kind === 'ipv6' ? 'IPv6 (16 Byte), z.B. 2001:db8::1' : 'IPv4 (4 Byte), z.B. 192.168.0.1'}.</div>`;
+        <div class="batch-hint">Fester Wert für alle Dateien — ${hint}:</div>
+        <input id="batch-val" class="batch-select" type="text" spellcheck="false" placeholder="${ph}">`;
     }
-    opBox.querySelectorAll('input,select').forEach(el =>
-      el.addEventListener('input', () => { setErr(''); updateApplyState(); }));
-    updateApplyState();
+    opBox.querySelectorAll('input,select').forEach(el => el.addEventListener('input', () => { buildErr.textContent = ''; }));
+    addBtn.disabled = false;
   }
 
   function readDelta() {
     const g = (id) => Math.max(0, parseInt($(id)?.value || '0', 10) || 0);
-    return {
-      sign: parseInt($('#batch-sign')?.value || '1', 10),
-      days: g('#batch-days'), hours: g('#batch-hours'),
-      minutes: g('#batch-mins'), seconds: g('#batch-secs'),
-    };
+    return { sign: parseInt($('#batch-sign')?.value || '1', 10), days: g('#batch-days'),
+             hours: g('#batch-hours'), minutes: g('#batch-mins'), seconds: g('#batch-secs') };
   }
-  function deltaIsZero(d) { return !(d.days || d.hours || d.minutes || d.seconds); }
+  function deltaZero(d) { return !(d.days || d.hours || d.minutes || d.seconds); }
+  function deltaDesc(d) {
+    const s = d.sign < 0 ? '−' : '+';
+    const parts = [];
+    if (d.days) parts.push(`${d.days}T`);
+    if (d.hours) parts.push(`${d.hours}h`);
+    if (d.minutes) parts.push(`${d.minutes}m`);
+    if (d.seconds) parts.push(`${d.seconds}s`);
+    return `${s}${parts.join(' ')}`;
+  }
+
+  function renderRules() {
+    rulesBox.innerHTML = '';
+    if (!rules.length) {
+      const e = document.createElement('div');
+      e.className = 'batch-rules-empty';
+      e.textContent = 'Noch keine Änderung hinzugefügt.';
+      rulesBox.appendChild(e);
+    } else {
+      rules.forEach((r, idx) => {
+        const row = document.createElement('div');
+        row.className = 'batch-rule';
+        const txt = document.createElement('span');
+        txt.className = 'batch-rule-txt';
+        txt.textContent = r.desc;
+        const del = document.createElement('button');
+        del.className = 'batch-rule-del';
+        del.textContent = '✕';
+        del.title = 'Regel entfernen';
+        del.onclick = () => { rules.splice(idx, 1); renderRules(); updateApplyState(); };
+        row.appendChild(txt); row.appendChild(del);
+        rulesBox.appendChild(row);
+      });
+    }
+    updateApplyState();
+  }
 
   function updateApplyState() {
-    const f = currentField();
-    let ready = !!(f && inputDir && outputDir);
-    if (ready && BATCH_TIME_KINDS.has(f.kind)) ready = !deltaIsZero(readDelta());
-    if (ready && (f.kind === 'ipv4' || f.kind === 'ipv6')) ready = !!($('#batch-ip')?.value.trim());
-    applyBtn.disabled = !ready;
+    applyBtn.disabled = !(rules.length && inputDir && outputDir);
   }
 
-  fieldSel.addEventListener('change', () => { setErr(''); renderOp(); });
+  fieldSel.addEventListener('change', renderOp);
+
+  // Regel aus dem Builder übernehmen.
+  addBtn.onclick = () => {
+    const f = builderField();
+    if (!f) return;
+    if (rules.some(r => r.name === f.name && r.kind === f.kind)) {
+      buildErr.textContent = 'Für dieses Feld gibt es bereits eine Regel.';
+      return;
+    }
+    if (BATCH_TIME_KINDS.has(f.kind)) {
+      const delta = readDelta();
+      if (deltaZero(delta)) { buildErr.textContent = 'Bitte einen Zeitversatz > 0 angeben.'; return; }
+      rules.push({ name: f.name, kind: f.kind, delta, desc: `${f.name}: ${deltaDesc(delta)}` });
+    } else {
+      const val = $('#batch-val')?.value.trim() ?? '';
+      if (!val) { buildErr.textContent = 'Bitte einen Wert angeben.'; return; }
+      rules.push({ name: f.name, kind: f.kind, value: val, desc: `${f.name} = ${val}` });
+    }
+    buildErr.textContent = '';
+    fieldSel.value = ''; renderOp();          // Builder zurücksetzen
+    renderRules();
+  };
 
   // 1 · Eingabe-Ordner wählen und scannen.
   $('#batch-in-btn').onclick = async () => {
@@ -2922,23 +2999,22 @@ function openBatchDialog() {
     if (!res || !res.ok) { setErr(res?.error || 'Scan fehlgeschlagen.'); inInfo.textContent = dir; return; }
     fields = res.fields;
     inInfo.textContent = `${dir}  —  ${res.fileCount} Dateien, ${res.parsedCount} mit Feldern`;
-    // Feld-Dropdown befüllen
     fieldSel.innerHTML = '';
     if (!fields.length) {
       const o = document.createElement('option');
-      o.value = ''; o.textContent = '— keine Zeit-/IP-Felder gefunden —';
+      o.value = ''; o.textContent = '— keine editierbaren Felder gefunden —';
       fieldSel.appendChild(o); fieldSel.disabled = true;
     } else {
       const head = document.createElement('option');
       head.value = ''; head.textContent = '— Feld wählen —';
       fieldSel.appendChild(head);
-      for (const f of fields) {
+      fields.forEach((f, i) => {
         const o = document.createElement('option');
-        o.value = f.name + ' ' + f.kind;
+        o.value = String(i);
         const label = BATCH_KIND_LABEL[f.kind] || f.kind;
         o.textContent = `${f.name}  ·  ${label}  ·  in ${f.files} Datei(en), z.B. ${f.sample}`;
         fieldSel.appendChild(o);
-      }
+      });
       fieldSel.disabled = false;
     }
     outBtn.disabled = !fields.length;
@@ -2958,31 +3034,39 @@ function openBatchDialog() {
 
   // Anwenden.
   applyBtn.onclick = async () => {
-    const f = currentField();
-    if (!f) return;
+    if (!rules.length) return;
     setErr(''); reportDiv.classList.add('hidden');
-    const opts = { inputDir, outputDir, name: f.name, kind: f.kind };
-    if (BATCH_TIME_KINDS.has(f.kind)) opts.delta = readDelta();
-    else opts.ipValue = $('#batch-ip')?.value.trim();
+    const opts = { inputDir, outputDir, rules: rules.map(r => (
+      BATCH_TIME_KINDS.has(r.kind) ? { name: r.name, kind: r.kind, delta: r.delta }
+                                   : { name: r.name, kind: r.kind, value: r.value })) };
 
     applyBtn.disabled = true; applyBtn.textContent = 'Verarbeite …';
     const res = await window.berApi.batchApply(opts);
     applyBtn.textContent = 'Anwenden'; updateApplyState();
     if (!res || !res.ok) { setErr(res?.error || 'Batch fehlgeschlagen.'); return; }
 
-    const changed = res.report.filter(r => r.status === 'changed');
     const skipped = res.report.filter(r => r.status === 'skipped');
     const failed  = res.report.filter(r => r.status === 'error');
     let html = `<div class="batch-report-head">✓ ${res.changedFiles} Datei(en) geändert `
              + `(${res.totalChanges} Werte) · ${skipped.length} übersprungen`
              + (failed.length ? ` · <span class="batch-fail">${failed.length} Fehler</span>` : '')
              + `</div><div class="batch-report-sub">Ausgabe: ${res.outputDir}</div>`;
+    if (res.ruleSummary && res.ruleSummary.length) {
+      html += '<div class="batch-report-rules">';
+      for (const rs of res.ruleSummary) {
+        const line = document.createElement('div');
+        line.className = 'batch-report-line ' + (rs.changed ? 'ok' : 'skip');
+        line.textContent = `• ${rs.name}: ${rs.changed} Wert(e) geändert`;
+        html += line.outerHTML;
+      }
+      html += '</div>';
+    }
     html += '<div class="batch-report-list">';
     for (const r of res.report) {
       const icon = r.status === 'changed' ? '✓' : r.status === 'skipped' ? '–' : '✗';
       const cls  = r.status === 'changed' ? 'ok' : r.status === 'skipped' ? 'skip' : 'fail';
       const note = r.status === 'changed' ? `${r.changed} Wert(e)`
-                 : r.status === 'skipped' ? 'Feld nicht vorhanden'
+                 : r.status === 'skipped' ? 'keine Regel getroffen'
                  : (r.error || 'Fehler');
       const line = document.createElement('div');
       line.className = 'batch-report-line ' + cls;
@@ -2994,4 +3078,6 @@ function openBatchDialog() {
     reportDiv.classList.remove('hidden');
     statusLeft.textContent = `Batch: ${res.changedFiles} geändert, ${skipped.length} übersprungen`;
   };
+
+  renderRules();
 }

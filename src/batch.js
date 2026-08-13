@@ -138,13 +138,76 @@ function deltaToMs(delta) {
   return sign * ((((d * 24 + h) * 60 + mi) * 60 + se) * 1000);
 }
 
+// ── Wert-Kodierung für „festen Wert setzen" (Nicht-Zeit-Felder) ───────────────
+// ASN.1-Zeichenketten-Typen, deren gespeicherte Bytes der Text sind.
+const STRING_TYPES = new Set([
+  'UTF8String', 'PrintableString', 'IA5String', 'VisibleString', 'BMPString',
+  'NumericString', 'GraphicString', 'GeneralString', 'UniversalString',
+  'TeletexString', 'VideotexString', 'ObjectDescriptor',
+]);
+
+// UTF-8-Kodierung ohne Abhängigkeit von TextEncoder (Sandbox-tauglich).
+function utf8Encode(str) {
+  const out = [];
+  for (const ch of String(str)) {
+    let c = ch.codePointAt(0);
+    if (c < 0x80) out.push(c);
+    else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f));
+    else if (c < 0x10000) out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
+    else out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 0x3f), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
+  }
+  return out;
+}
+
+// Eingabe-Zeichenkette abhängig von der Feldart in Bytes kodieren.
+// Gibt { bytes } oder { error } zurück. Spiegelt applyEdit() aus renderer.js.
+function encodeValueForKind(kind, input) {
+  const s = input == null ? '' : String(input);
+  if (kind === 'ipv4' || kind === 'ipv6') {
+    const b = parseIpToBytesBatch(s.trim());
+    if (!b) return { error: 'Ungültige IP-Adresse.' };
+    const need = kind === 'ipv6' ? 16 : 4;
+    if (b.length !== need) return { error: `Für dieses Feld wird IPv${need === 16 ? 6 : 4} (${need} Bytes) erwartet.` };
+    return { bytes: b };
+  }
+  if (kind === 'int' || kind === 'enum') {
+    const c = s.trim();
+    let v;
+    try {
+      if (/^-?\d+$/.test(c)) v = BigInt(c);
+      else if (/^-?0x[0-9a-fA-F]+$/i.test(c)) v = c.startsWith('-') ? -BigInt(c.slice(1)) : BigInt(c);
+      else return { error: 'Ganzzahl erwartet (dezimal oder 0x…).' };
+    } catch { return { error: 'Ungültige Zahl.' }; }
+    if (kind === 'enum' && v < 0n) return { error: 'ENUMERATED muss ≥ 0 sein.' };
+    return { bytes: encodeBerIntegerBatch(v) };
+  }
+  if (kind === 'bool') {
+    const c = s.trim().toLowerCase();
+    if (['true', '1', 'ff', '0xff', 'wahr'].includes(c)) return { bytes: [0xff] };
+    if (['false', '0', '00', '0x00', 'falsch'].includes(c)) return { bytes: [0x00] };
+    return { error: 'TRUE/FALSE (oder 1/0) erwartet.' };
+  }
+  if (kind === 'hex') {
+    const h = s.replace(/\s+/g, '');
+    if (!/^[0-9a-fA-F]*$/.test(h) || h.length % 2 !== 0) return { error: 'Hex in Paaren, z.B. 30 31 32 oder 303132.' };
+    const b = [];
+    for (let i = 0; i < h.length; i += 2) b.push(parseInt(h.slice(i, i + 2), 16));
+    return { bytes: b };
+  }
+  // string (Standard)
+  return { bytes: utf8Encode(s) };
+}
+
 // ── Knoten-Klassifikation ─────────────────────────────────────────────────────
-// Bestimmt, ob ein Blatt-Knoten ein editierbares Zeit- oder IP-Feld ist.
-// Gibt { kind, name } oder null zurück. Spiegelt die Erkennung aus main.js/renderer.js.
+// Bestimmt die Bearbeitungsart eines Blatt-Knotens. Gibt { kind, name } oder null
+// (kein editierbarer Wert) zurück. Spiegelt die Typ-Erkennung aus main.js/renderer.js.
+//   Zeit:  gtime | utctime | unixtime   (per Delta verschieben)
+//   Wert:  ipv4 | ipv6 | int | enum | bool | string | hex   (fester Wert setzen)
 function classifyEditableNode(node) {
   if (node.children && node.children.length) return null;
   const name = node.fieldName || node.typeName || node.tagLabel || '?';
   const oct = node.origChildType;
+  const raw = node.rawValue;
 
   // GeneralizedTime (UNIVERSAL 24 oder kontext-getaggt)
   if ((node.cls === 0 && node.tag === 24) || (node.cls === 2 && oct === 'GeneralizedTime'))
@@ -160,8 +223,7 @@ function classifyEditableNode(node) {
       return { kind: 'unixtime', name };
   }
 
-  // IP-Adressen (Spiegel von isIpField)
-  const raw = node.rawValue;
+  // IP-Adressen (Spiegel von isIpField) — vor Hex prüfen
   if (raw) {
     const fn = node.fieldName || '';
     if (raw.length === 4 && (
@@ -173,10 +235,35 @@ function classifyEditableNode(node) {
         oct === 'IPv6Address' || oct === 'IPAddress'))
       return { kind: 'ipv6', name };
   }
+
+  // BOOLEAN
+  if ((node.cls === 0 && node.tag === 1) || (node.cls === 2 && oct === 'BOOLEAN'))
+    return { kind: 'bool', name };
+  // ENUMERATED (UNIVERSAL 10 oder kontext-getaggt)
+  if ((node.cls === 0 && node.tag === 10) || (node.cls === 2 && oct === 'ENUMERATED'))
+    return { kind: 'enum', name };
+  // INTEGER (UNIVERSAL 2 oder kontext-getaggt) — Unix-Zeit ist oben schon abgefangen
+  if ((node.cls === 0 && node.tag === 2) || (node.cls === 2 && oct === 'INTEGER'))
+    return { kind: 'int', name };
+
+  // Zeichenketten-Typen → Text
+  const isUnivString = node.cls === 0 && [12, 18, 19, 20, 21, 22, 25, 26, 27, 28, 29, 30].includes(node.tag);
+  const isCtxString = node.cls === 2 && STRING_TYPES.has(oct);
+  let isPlainAscii = false;
+  if (raw && raw.length && raw.every(b => b >= 0x20 && b <= 0x7e)) {
+    // nur wenn der angezeigte Wert wörtlich die ASCII-Bytes sind (kein dekodierter Wert wie IP/OID)
+    const asAscii = bytesToAscii(raw);
+    isPlainAscii = node.displayValue == null || String(node.displayValue) === asAscii;
+  }
+  if (isUnivString || isCtxString || isPlainAscii) return { kind: 'string', name };
+
+  // Rest (OID, BIT STRING, BCD, PLMN, sonstige Binärdaten) → Hex
+  if (raw && raw.length) return { kind: 'hex', name };
   return null;
 }
 
 const TIME_KINDS = new Set(['gtime', 'utctime', 'unixtime']);
+const VALUE_KINDS = new Set(['ipv4', 'ipv6', 'int', 'enum', 'bool', 'string', 'hex']);
 
 // Alle editierbaren Felder eines Knotenbaums einsammeln, gruppiert nach (name, kind).
 // Rückgabe: [{ name, kind, count, sample }]
@@ -200,8 +287,8 @@ function collectFields(nodes) {
   return Array.from(map.values());
 }
 
-// Auswahl auf einen Knotenbaum anwenden (mutiert die Knoten).
-// sel = { name, kind, deltaMs?, ipBytes? }
+// Eine einzelne Regel auf einen Knotenbaum anwenden (mutiert die Knoten).
+// sel = { name, kind, deltaMs? (Zeit) | setBytes? (Wert) }
 // Rückgabe: Anzahl geänderter Knoten.
 function applyToTree(nodes, sel) {
   let changed = 0;
@@ -218,10 +305,14 @@ function applyToTree(nodes, sel) {
         } else if (sel.kind === 'unixtime') {
           node.rawValue = shiftUnixSecondsBytes(node.rawValue || [], Math.round(sel.deltaMs / 1000));
           changed++;
-        } else if (sel.kind === 'ipv4' || sel.kind === 'ipv6') {
-          if (sel.ipBytes && node.rawValue && sel.ipBytes.length === node.rawValue.length) {
-            node.rawValue = sel.ipBytes.slice();
-            changed++;
+        } else if (sel.setBytes) {
+          // Wert-Felder: festen Wert setzen. Bei IP muss die Bytelänge passen.
+          if (sel.kind === 'ipv4' || sel.kind === 'ipv6') {
+            if (node.rawValue && sel.setBytes.length === node.rawValue.length) {
+              node.rawValue = sel.setBytes.slice(); node.displayValue = null; changed++;
+            }
+          } else {
+            node.rawValue = sel.setBytes.slice(); node.displayValue = null; changed++;
           }
         }
       }
@@ -232,11 +323,26 @@ function applyToTree(nodes, sel) {
   return changed;
 }
 
+// Mehrere Regeln nacheinander auf denselben Baum anwenden.
+// sels = [{ name, kind, deltaMs?|setBytes? }]
+// Rückgabe: { total, perRule: [Anzahl je Regel] }
+function applyRules(nodes, sels) {
+  const perRule = [];
+  let total = 0;
+  for (const sel of sels) {
+    const n = applyToTree(nodes, sel);
+    perRule.push(n);
+    total += n;
+  }
+  return { total, perRule };
+}
+
 // In Node (main.js) exportieren; im Browser/Sandbox ignoriert.
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     bytesToAscii, asciiToBytes, encodeBerIntegerBatch, parseIpToBytesBatch,
     shiftGeneralizedTimeStr, shiftUtcTimeStr, shiftUnixSecondsBytes, deltaToMs,
-    classifyEditableNode, collectFields, applyToTree, TIME_KINDS,
+    utf8Encode, encodeValueForKind, classifyEditableNode, collectFields,
+    applyToTree, applyRules, TIME_KINDS, VALUE_KINDS, STRING_TYPES,
   };
 }

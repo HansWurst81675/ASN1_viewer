@@ -1333,7 +1333,7 @@ ipcMain.handle('batch-scan', async (_, dir) => {
         if (!fields.length) continue;          // keine Zeit-/IP-Felder → uninteressant
         parsed.push(name);
         for (const f of fields) {
-          const key = f.name + ' ' + f.kind;
+          const key = f.name + '|' + f.kind;
           if (!fieldMap.has(key)) fieldMap.set(key, { name: f.name, kind: f.kind, count: 0, sample: f.sample, files: 0 });
           const e = fieldMap.get(key);
           e.count += f.count;
@@ -1352,29 +1352,34 @@ ipcMain.handle('batch-scan', async (_, dir) => {
 });
 
 // Batch anwenden: gewähltes Feld in allen Dateien ändern und in den Ausgabe-Ordner
-// schreiben. Dateien ohne das Feld werden übersprungen (kein Fehler).
-// opts = { inputDir, outputDir, name, kind, delta?, ipValue? }
+// schreiben. Es können mehrere Regeln (Felder) auf einmal angewendet werden.
+// Dateien, in denen keine Regel greift, werden übersprungen (kein Fehler).
+// opts = { inputDir, outputDir, rules: [{ name, kind, delta?, value? }] }
 ipcMain.handle('batch-apply', async (_, opts) => {
   try {
-    const { inputDir, outputDir, name, kind } = opts || {};
+    const { inputDir, outputDir } = opts || {};
+    const rules = Array.isArray(opts && opts.rules) ? opts.rules : [];
     if (!inputDir || !fs.existsSync(inputDir)) return { ok: false, error: 'Eingabe-Ordner nicht gefunden.' };
     if (!outputDir) return { ok: false, error: 'Kein Ausgabe-Ordner gewählt.' };
-    if (!name || !kind) return { ok: false, error: 'Kein Feld gewählt.' };
+    if (!rules.length) return { ok: false, error: 'Keine Änderung angegeben.' };
 
-    // Auswahlobjekt für applyToTree vorbereiten + Eingaben validieren.
-    const sel = { name, kind };
-    if (batch.TIME_KINDS.has(kind)) {
-      const deltaMs = batch.deltaToMs(opts.delta || {});
-      if (!deltaMs) return { ok: false, error: 'Das Delta ist 0 — bitte einen Zeitversatz angeben.' };
-      sel.deltaMs = deltaMs;
-    } else if (kind === 'ipv4' || kind === 'ipv6') {
-      const bytes = batch.parseIpToBytesBatch(opts.ipValue || '');
-      if (!bytes) return { ok: false, error: 'Ungültige IP-Adresse.' };
-      const need = kind === 'ipv6' ? 16 : 4;
-      if (bytes.length !== need) return { ok: false, error: `Für dieses Feld wird eine IPv${need === 16 ? 6 : 4}-Adresse (${need} Bytes) erwartet.` };
-      sel.ipBytes = bytes;
-    } else {
-      return { ok: false, error: 'Unbekannte Feldart.' };
+    // Jede Regel in ein Auswahlobjekt für applyToTree übersetzen + validieren.
+    const sels = [];
+    for (const r of rules) {
+      if (!r || !r.name || !r.kind) return { ok: false, error: 'Regel ohne Feld/Art.' };
+      const sel = { name: r.name, kind: r.kind };
+      if (batch.TIME_KINDS.has(r.kind)) {
+        const deltaMs = batch.deltaToMs(r.delta || {});
+        if (!deltaMs) return { ok: false, error: `„${r.name}": Delta ist 0 — bitte einen Zeitversatz angeben.` };
+        sel.deltaMs = deltaMs;
+      } else if (batch.VALUE_KINDS.has(r.kind)) {
+        const enc = batch.encodeValueForKind(r.kind, r.value);
+        if (enc.error) return { ok: false, error: `„${r.name}": ${enc.error}` };
+        sel.setBytes = enc.bytes;
+      } else {
+        return { ok: false, error: `„${r.name}": unbekannte Feldart.` };
+      }
+      sels.push(sel);
     }
 
     // Ausgabe-Ordner anlegen; Überschreiben des Eingabe-Ordners verhindern.
@@ -1382,7 +1387,8 @@ ipcMain.handle('batch-apply', async (_, opts) => {
       return { ok: false, error: 'Ausgabe-Ordner muss sich vom Eingabe-Ordner unterscheiden.' };
     fs.mkdirSync(outputDir, { recursive: true });
 
-    const report = [];   // { file, status: 'changed'|'skipped'|'error', changed, error? }
+    const report = [];   // { file, status, changed, error? }
+    const ruleTotals = sels.map(() => 0);
     let changedFiles = 0, totalChanges = 0;
     for (const fname of listBatchFiles(inputDir)) {
       const full = path.join(inputDir, fname);
@@ -1390,20 +1396,22 @@ ipcMain.handle('batch-apply', async (_, opts) => {
         const buf = fs.readFileSync(full);
         const typeHint = detectTypeHint(buf);
         const nodes = parseBer(buf, 0, typeHint, tagMaps);
-        const changed = batch.applyToTree(nodes, sel);
-        if (changed === 0) {
+        const { total, perRule } = batch.applyRules(nodes, sels);
+        if (total === 0) {
           report.push({ file: fname, status: 'skipped', changed: 0 });
           continue;
         }
         const out = serializeNodes(nodes);
         fs.writeFileSync(path.join(outputDir, fname), out);
-        report.push({ file: fname, status: 'changed', changed });
-        changedFiles++; totalChanges += changed;
+        perRule.forEach((n, i) => { ruleTotals[i] += n; });
+        report.push({ file: fname, status: 'changed', changed: total });
+        changedFiles++; totalChanges += total;
       } catch (e) {
         report.push({ file: fname, status: 'error', changed: 0, error: e.message });
       }
     }
-    return { ok: true, outputDir, changedFiles, totalChanges, report };
+    const ruleSummary = sels.map((s, i) => ({ name: s.name, kind: s.kind, changed: ruleTotals[i] }));
+    return { ok: true, outputDir, changedFiles, totalChanges, ruleSummary, report };
   } catch (e) {
     return { ok: false, error: e.message };
   }
