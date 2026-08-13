@@ -229,19 +229,29 @@ werden als **Regelliste** zusammengestellt und gemeinsam in einem Durchlauf ange
 **Ablauf im Dialog:**
 
 1. **Eingabe-Ordner wählen** — alle Dateien im Ordner werden geparst und ihre editierbaren
-   Felder eingesammelt. Angezeigt wird, wie viele Dateien gefunden wurden und wie viele
-   auswertbare Felder enthalten.
+   Felder eingesammelt. Angezeigt wird, wie viele Dateien gefunden wurden, wie viele
+   auswertbare Felder enthalten und wie viele **ignoriert** wurden. **Nicht-BER-Dateien**
+   (z. B. `*.txt`, `*.zip`, sonstige Fremddateien) werden anhand der BER-Struktur automatisch
+   erkannt, **ignoriert** und niemals verändert oder in den Ausgabe-Ordner geschrieben — der
+   Ordner muss also nicht „sauber" sein.
 2. **Änderungen zusammenstellen** — pro Feld eine Regel hinzufügen:
-   - **Feld wählen** — die durchsuchbare Liste zeigt jedes Feld mit Art und Beispielwert, z. B.
-     `timeStamp · Zeit · GeneralizedTime · in 42 Datei(en), z.B. 2024-01-01 12:00:00Z`.
-     Kommt ein Feldname in mehreren Ausprägungen vor (z. B. `iPBinaryAddress` als IPv4 **und**
-     IPv6), erscheint er als getrennte Einträge.
-     - **Suchfeld** — tippe einen Teil des Feldnamens **oder** eines Beispielwerts (z. B. eine
-       IP, ein Datum, „ParserType"), um die Liste einzugrenzen.
-     - **Checkbox „nur Zeit / IP"** — blendet alles außer Zeitstempel- und IP-Feldern aus. Sind
-       solche Felder vorhanden, ist sie nach dem Scan **automatisch aktiv**, damit lange Listen
-       (z. B. Log-/Fehlerdumps mit vielen Textfeldern) sofort auf die typischen Ziele
-       zusammenschrumpfen. Zum Bearbeiten anderer Felder einfach abwählen.
+   - **Feld wählen** — die durchsuchbare Liste zeigt jedes Feld mit seinem **Label** (Tag und
+     Typ), der Bearbeitungsart, dem Vorkommen und einem Beispielwert, z. B.
+     `#7 timeStamp` / `Tag GeneralizedTime · Typ GeneralizedTime · Zeit · in 42/62 Dateien` /
+     `z.B. 2024-01-01 12:00:00Z`. Kommt ein Feldname in mehreren Ausprägungen vor
+     (z. B. `iPBinaryAddress` als IPv4 **und** IPv6), erscheint er als getrennte Einträge.
+   - **Reihenfolge = BER-Struktur** — die Liste folgt der **Dokumentreihenfolge** innerhalb der
+     Datei (Tiefensuche), nicht dem Alphabet; die laufende Nummer `#n` zeigt die Position. So
+     lässt sich ein Feld dort finden, wo es auch im Baum steht.
+   - **Suchfeld** — tippe einen Teil des Feldnamens, Labels **oder** eines Beispielwerts
+     (z. B. eine IP, ein Datum, „ParserType"), um die Liste einzugrenzen.
+   - **Vorkommen-Filter** — `alle Felder` / `in mehr als 1 Datei` / `in allen Dateien`. Damit
+     lassen sich sporadische Felder ausblenden und gezielt nur Felder bearbeiten, die in
+     mehreren bzw. **allen** Dateien vorkommen.
+   - **Checkbox „nur Zeit / IP"** — blendet alles außer Zeitstempel- und IP-Feldern aus. Sind
+     solche Felder vorhanden, ist sie nach dem Scan **automatisch aktiv**, damit lange Listen
+     (z. B. Log-/Fehlerdumps mit vielen Textfeldern) sofort auf die typischen Ziele
+     zusammenschrumpfen. Zum Bearbeiten anderer Felder (z. B. **LIID**) einfach abwählen.
    - **Änderung angeben** (je nach Feldart):
      - **Zeitstempel** → **Delta** aus Vorzeichen (`+`/`−`) und Tagen, Stunden, Minuten und
        Sekunden. Jeder Wert wird um genau diesen Betrag verschoben; relative Abstände bleiben
@@ -356,7 +366,9 @@ Schwerpunkt: **Batch-Bearbeitung** — beliebige Felder in allen Dateien eines O
 
 - **⧉ Batch-Dialog** (neue Toolbar-Schaltfläche) — Eingabe-Ordner scannen und in allen enthaltenen BER-Dateien gemeinsam bearbeiten. Ergebnisse landen in einem **separaten Ausgabe-Ordner**; die Originale bleiben unangetastet.
 - **Alle Feldarten wählbar** — nicht nur Zeit/IP: Zeitstempel werden per **Delta** verschoben; `INTEGER`/`ENUMERATED`, `BOOLEAN`, Text-Strings, IP-Adressen und beliebige Rohbytes (Hex) werden auf einen **festen Wert** gesetzt. Kodierung identisch zum Einzel-Editor.
-- **Mehrere Regeln gleichzeitig** — pro Feld eine Regel zur Liste hinzufügen (z. B. Zeitstempel **und** IP **und** Text-String); alle Regeln werden in einem Durchlauf auf jede Datei angewendet. Bericht mit Summe je Regel und Status je Datei.
+- **Mehrere Regeln gleichzeitig** — pro Feld eine Regel zur Liste hinzufügen (z. B. Zeitstempel **und** IP **und** LIID/Text-String); alle Regeln werden in einem Durchlauf auf jede Datei angewendet. Bericht mit Summe je Regel und Status je Datei.
+- **Durchsuchbare Feldliste in BER-Struktur** — Felder erscheinen in **Dokumentreihenfolge** (nicht alphabetisch) mit sichtbaren **Labels** (Tag + Typ). Filtern per Suchtext (Name/Label/Beispielwert), per **Vorkommen** (alle / in >1 Datei / in allen Dateien) und per Checkbox „nur Zeit/IP". LI-spezifische Textfelder wie das **LIID** (`LawfulInterceptionIdentifier`) werden als Text erkannt und lassen sich einheitlich setzen.
+- **Nicht-BER-Dateien werden ignoriert** — `*.txt`, `*.zip` u. Ä. werden anhand der BER-Struktur erkannt, im Scan als „ignoriert" gezählt und nie angefasst.
 - **Zeitstempel-Delta** — Vorzeichen plus Tage/Stunden/Minuten/Sekunden; unterstützt `GeneralizedTime`, `UTCTime` (2-stelliges Jahr, Jahrhundert-Regel nach RFC 5280) und Unix-Sekunden-`INTEGER` (`seconds`, mit `00`-Vorzeichenbyte ab 2038). Sekundenbruchteile und `Z` bleiben erhalten.
 - **Trifft keine Regel in einer Datei, wird sie übersprungen** (kein Abbruch); greift nur ein Teil der Regeln, werden genau diese angewendet. Bericht listet je Datei *geändert* (mit Anzahl), *übersprungen* oder *Fehler*.
 - **Neue reine Logik in `src/batch.js`** (ohne electron-/DOM-Abhängigkeit) mit eigenem Testset `test/batch.test.js` (`npm test` führt Roundtrip- **und** Batch-Tests aus). Die Serialisierung nutzt denselben Pfad wie *Save As*.

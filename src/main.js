@@ -1320,21 +1320,26 @@ ipcMain.handle('batch-scan', async (_, dir) => {
   try {
     if (!dir || !fs.existsSync(dir)) return { ok: false, error: 'Ordner nicht gefunden.' };
     const names = listBatchFiles(dir);
-    const fieldMap = new Map();   // key → { name, kind, count, sample, files }
+    const fieldMap = new Map();   // key → { name, kind, count, sample, files, order, tagLabel, typeName }
     const parsed = [];            // erfolgreich geparste Dateien
     const errors = [];            // { file, error }
+    let ignored = 0;              // Nicht-BER-Dateien (z.B. .txt, .zip)
     for (const name of names) {
       const full = path.join(dir, name);
       try {
         const buf = fs.readFileSync(full);
+        if (!looksLikeBer(buf)) { ignored++; continue; }   // keine BER-Datei → ignorieren
         const typeHint = detectTypeHint(buf);
         const nodes = parseBer(buf, 0, typeHint, tagMaps);
         const fields = batch.collectFields(nodes);
-        if (!fields.length) continue;          // keine Zeit-/IP-Felder → uninteressant
+        if (!fields.length) continue;          // keine editierbaren Felder → uninteressant
         parsed.push(name);
         for (const f of fields) {
           const key = f.name + '|' + f.kind;
-          if (!fieldMap.has(key)) fieldMap.set(key, { name: f.name, kind: f.kind, count: 0, sample: f.sample, files: 0 });
+          if (!fieldMap.has(key)) fieldMap.set(key, {
+            name: f.name, kind: f.kind, count: 0, sample: f.sample, files: 0,
+            order: fieldMap.size, tagLabel: f.tagLabel || '', typeName: f.typeName || '',
+          });
           const e = fieldMap.get(key);
           e.count += f.count;
           e.files += 1;
@@ -1343,9 +1348,9 @@ ipcMain.handle('batch-scan', async (_, dir) => {
         errors.push({ file: name, error: e.message });
       }
     }
-    const fields = Array.from(fieldMap.values())
-      .sort((a, b) => a.name.localeCompare(b.name) || a.kind.localeCompare(b.kind));
-    return { ok: true, dir, fileCount: names.length, parsedCount: parsed.length, fields, errors };
+    // Reihenfolge = erstes Auftreten (BER-Dokumentreihenfolge), NICHT alphabetisch.
+    const fields = Array.from(fieldMap.values());
+    return { ok: true, dir, fileCount: names.length, parsedCount: parsed.length, ignored, fields, errors };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -1394,6 +1399,10 @@ ipcMain.handle('batch-apply', async (_, opts) => {
       const full = path.join(inputDir, fname);
       try {
         const buf = fs.readFileSync(full);
+        if (!looksLikeBer(buf)) {                 // keine BER-Datei (z.B. .txt/.zip) → nie schreiben
+          report.push({ file: fname, status: 'ignored', changed: 0 });
+          continue;
+        }
         const typeHint = detectTypeHint(buf);
         const nodes = parseBer(buf, 0, typeHint, tagMaps);
         const { total, perRule } = batch.applyRules(nodes, sels);

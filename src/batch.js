@@ -144,6 +144,8 @@ const STRING_TYPES = new Set([
   'UTF8String', 'PrintableString', 'IA5String', 'VisibleString', 'BMPString',
   'NumericString', 'GraphicString', 'GeneralString', 'UniversalString',
   'TeletexString', 'VideotexString', 'ObjectDescriptor',
+  // LI-spezifische String-Typen (z.B. LIID)
+  'LawfulInterceptionIdentifier',
 ]);
 
 // UTF-8-Kodierung ohne Abhängigkeit von TextEncoder (Sandbox-tauglich).
@@ -266,9 +268,11 @@ const TIME_KINDS = new Set(['gtime', 'utctime', 'unixtime']);
 const VALUE_KINDS = new Set(['ipv4', 'ipv6', 'int', 'enum', 'bool', 'string', 'hex']);
 
 // Alle editierbaren Felder eines Knotenbaums einsammeln, gruppiert nach (name, kind).
-// Rückgabe: [{ name, kind, count, sample }]
+// Die Reihenfolge entspricht der Struktur der BER-Datei (Tiefensuche, Dokumentreihenfolge).
+// Rückgabe: [{ name, kind, count, sample, order, tagLabel, typeName }]
 function collectFields(nodes) {
   const map = new Map();
+  let order = 0;
   const walk = (arr) => {
     for (const node of arr) {
       const c = classifyEditableNode(node);
@@ -276,7 +280,10 @@ function collectFields(nodes) {
         const key = c.name + '|' + c.kind;
         if (!map.has(key)) {
           const sample = node.displayValue != null ? String(node.displayValue) : bytesToAscii(node.rawValue || []);
-          map.set(key, { name: c.name, kind: c.kind, count: 0, sample });
+          map.set(key, {
+            name: c.name, kind: c.kind, count: 0, sample, order: order++,
+            tagLabel: node.tagLabel || '', typeName: node.typeName || node.origChildType || '',
+          });
         }
         map.get(key).count++;
       }

@@ -2838,12 +2838,19 @@ function openBatchDialog() {
         <div class="batch-builder">
           <div class="batch-filter-row">
             <input id="batch-filter" class="batch-select" type="text" spellcheck="false"
-                   placeholder="Feld suchen — Name oder Beispielwert …" disabled>
+                   placeholder="Feld suchen — Name, Label oder Beispielwert …" disabled>
             <label class="batch-check"><input type="checkbox" id="batch-only-ti"> nur Zeit / IP</label>
           </div>
-          <select id="batch-field" class="batch-listbox" size="8" disabled>
-            <option value="">— zuerst Ordner scannen —</option>
-          </select>
+          <div class="batch-filter-row">
+            <label class="batch-check2">Vorkommen:
+              <select id="batch-occ" class="batch-select batch-occ" disabled>
+                <option value="all">alle Felder</option>
+                <option value="multi">in mehr als 1 Datei</option>
+                <option value="every">in allen Dateien</option>
+              </select>
+            </label>
+          </div>
+          <div id="batch-field" class="batch-fieldlist"><div class="batch-hint" style="padding:8px">— zuerst Ordner scannen —</div></div>
           <div id="batch-field-count" class="batch-hint"></div>
           <div id="batch-op" class="batch-op hidden"></div>
           <div class="batch-builder-actions">
@@ -2873,9 +2880,10 @@ function openBatchDialog() {
   const $ = (sel) => dlg.querySelector(sel);
   const inInfo   = $('#batch-in-info');
   const outInfo  = $('#batch-out-info');
-  const fieldSel = $('#batch-field');
+  const listEl   = $('#batch-field');
   const filterInp= $('#batch-filter');
   const onlyTi   = $('#batch-only-ti');
+  const occSel   = $('#batch-occ');
   const fieldCnt = $('#batch-field-count');
   const opBox    = $('#batch-op');
   const addBtn   = $('#batch-add');
@@ -2886,6 +2894,9 @@ function openBatchDialog() {
   const outBtn   = $('#batch-out-btn');
   const applyBtn = $('#batch-apply');
 
+  let parsedCount = 0;   // Anzahl Dateien mit Feldern (für „in allen Dateien")
+  let selIdx = -1;       // Index des gewählten Feldes in fields[]
+
   const close = () => dlg.remove();
   $('#batch-close').onclick = close;
   $('#edit-overlay').onclick = close;
@@ -2894,32 +2905,57 @@ function openBatchDialog() {
   const setErr = (m) => { errDiv.textContent = m || ''; };
 
   function builderField() {
-    const i = fieldSel.value;
-    return i === '' ? null : fields[Number(i)];
+    return selIdx >= 0 ? fields[selIdx] : null;
   }
 
-  // Feldliste (Listbox) nach Suchtext + „nur Zeit/IP" neu aufbauen.
+  // Feldliste (scrollbare Zeilen) nach Suchtext, „nur Zeit/IP" und Vorkommen aufbauen.
+  // Reihenfolge = BER-Struktur (wie aus dem Scan geliefert).
   function rebuildFieldList() {
     const q = (filterInp.value || '').trim().toLowerCase();
     const tiOnly = onlyTi.checked;
-    const prev = fieldSel.value;
-    fieldSel.innerHTML = '';
+    const occ = occSel.value;   // all | multi | every
+    listEl.innerHTML = '';
     let shown = 0;
     fields.forEach((f, i) => {
       if (tiOnly && !(BATCH_TIME_KINDS.has(f.kind) || f.kind === 'ipv4' || f.kind === 'ipv6')) return;
+      if (occ === 'multi' && f.files <= 1) return;
+      if (occ === 'every' && f.files < parsedCount) return;
       const label = BATCH_KIND_LABEL[f.kind] || f.kind;
-      const text = `${f.name}  ·  ${label}  ·  in ${f.files} Datei(en), z.B. ${f.sample}`;
-      if (q && !text.toLowerCase().includes(q)) return;
-      const o = document.createElement('option');
-      o.value = String(i);
-      o.textContent = text;
-      fieldSel.appendChild(o);
+      const meta = `Tag ${f.tagLabel || '—'} · Typ ${f.typeName || '—'} · ${label} · in ${f.files}/${parsedCount} Dateien`;
+      const searchText = `${f.name} ${f.tagLabel} ${f.typeName} ${label} ${f.sample}`.toLowerCase();
+      if (q && !searchText.includes(q)) return;
+
+      const row = document.createElement('div');
+      row.className = 'batch-fld-row' + (i === selIdx ? ' sel' : '');
+      row.dataset.i = String(i);
+      row.title = `${f.name} — ${meta}\nz.B. ${f.sample}`;
+      const main = document.createElement('div');
+      main.className = 'batch-fld-main';
+      main.innerHTML = `<span class="batch-fld-idx">#${(f.order ?? i) + 1}</span> <span class="batch-fld-name"></span>`;
+      main.querySelector('.batch-fld-name').textContent = f.name;
+      const metaEl = document.createElement('div');
+      metaEl.className = 'batch-fld-meta';
+      metaEl.textContent = meta;
+      const smp = document.createElement('div');
+      smp.className = 'batch-fld-sample';
+      smp.textContent = 'z.B. ' + f.sample;
+      row.appendChild(main); row.appendChild(metaEl); row.appendChild(smp);
+      row.onclick = () => {
+        selIdx = i;
+        [...listEl.querySelectorAll('.batch-fld-row')].forEach(r => r.classList.toggle('sel', r.dataset.i === String(i)));
+        renderOp();
+      };
+      listEl.appendChild(row);
       shown++;
     });
-    // vorherige Auswahl beibehalten, falls noch sichtbar
-    if (prev !== '' && [...fieldSel.options].some(o => o.value === prev)) fieldSel.value = prev;
+    if (!shown) {
+      const e = document.createElement('div');
+      e.className = 'batch-hint'; e.style.padding = '8px';
+      e.textContent = fields.length ? '— keine Treffer — Suche/Filter anpassen —' : '— keine editierbaren Felder —';
+      listEl.appendChild(e);
+    }
     fieldCnt.textContent = fields.length
-      ? `${shown} von ${fields.length} Feldern` + (shown === 0 ? ' — Suche/Filter anpassen' : '')
+      ? `${shown} von ${fields.length} Feldern · sortiert nach BER-Struktur`
       : '';
     renderOp();
   }
@@ -2999,9 +3035,9 @@ function openBatchDialog() {
     applyBtn.disabled = !(rules.length && inputDir && outputDir);
   }
 
-  fieldSel.addEventListener('change', renderOp);
   filterInp.addEventListener('input', rebuildFieldList);
   onlyTi.addEventListener('change', rebuildFieldList);
+  occSel.addEventListener('change', rebuildFieldList);
 
   // Regel aus dem Builder übernehmen.
   addBtn.onclick = () => {
@@ -3021,7 +3057,7 @@ function openBatchDialog() {
       rules.push({ name: f.name, kind: f.kind, value: val, desc: `${f.name} = ${val}` });
     }
     buildErr.textContent = '';
-    fieldSel.value = ''; renderOp();          // Builder zurücksetzen
+    selIdx = -1; rebuildFieldList();          // Builder zurücksetzen
     renderRules();
   };
 
@@ -3035,21 +3071,22 @@ function openBatchDialog() {
     const res = await window.berApi.batchScan(dir);
     if (!res || !res.ok) { setErr(res?.error || 'Scan fehlgeschlagen.'); inInfo.textContent = dir; return; }
     fields = res.fields;
-    inInfo.textContent = `${dir}  —  ${res.fileCount} Dateien, ${res.parsedCount} mit Feldern`;
+    parsedCount = res.parsedCount || 0;
+    selIdx = -1;
+    const ignoredTxt = res.ignored ? `, ${res.ignored} ignoriert (kein BER)` : '';
+    inInfo.textContent = `${dir}  —  ${res.fileCount} Dateien, ${parsedCount} mit Feldern${ignoredTxt}`;
     const has = fields.length > 0;
     filterInp.disabled = !has;
     onlyTi.disabled = !has;
-    fieldSel.disabled = !has;
-    if (!has) {
-      fieldSel.innerHTML = '<option value="">— keine editierbaren Felder gefunden —</option>';
-      fieldCnt.textContent = '';
-    } else {
+    occSel.disabled = !has;
+    if (has) {
       // Standard: sofort auf Zeit-/IP-Felder eindampfen, wenn es welche gibt
       const hasTi = fields.some(f => BATCH_TIME_KINDS.has(f.kind) || f.kind === 'ipv4' || f.kind === 'ipv6');
       onlyTi.checked = hasTi;
       filterInp.value = '';
-      rebuildFieldList();
+      occSel.value = 'all';
     }
+    rebuildFieldList();
     outBtn.disabled = !has;
     opBox.classList.add('hidden');
     updateApplyState();
@@ -3079,9 +3116,11 @@ function openBatchDialog() {
     if (!res || !res.ok) { setErr(res?.error || 'Batch fehlgeschlagen.'); return; }
 
     const skipped = res.report.filter(r => r.status === 'skipped');
+    const ignored = res.report.filter(r => r.status === 'ignored');
     const failed  = res.report.filter(r => r.status === 'error');
     let html = `<div class="batch-report-head">✓ ${res.changedFiles} Datei(en) geändert `
              + `(${res.totalChanges} Werte) · ${skipped.length} übersprungen`
+             + (ignored.length ? ` · ${ignored.length} ignoriert (kein BER)` : '')
              + (failed.length ? ` · <span class="batch-fail">${failed.length} Fehler</span>` : '')
              + `</div><div class="batch-report-sub">Ausgabe: ${res.outputDir}</div>`;
     if (res.ruleSummary && res.ruleSummary.length) {
@@ -3096,9 +3135,11 @@ function openBatchDialog() {
     }
     html += '<div class="batch-report-list">';
     for (const r of res.report) {
-      const icon = r.status === 'changed' ? '✓' : r.status === 'skipped' ? '–' : '✗';
-      const cls  = r.status === 'changed' ? 'ok' : r.status === 'skipped' ? 'skip' : 'fail';
+      const icon = r.status === 'changed' ? '✓' : r.status === 'error' ? '✗'
+                 : r.status === 'ignored' ? '∅' : '–';
+      const cls  = r.status === 'changed' ? 'ok' : r.status === 'error' ? 'fail' : 'skip';
       const note = r.status === 'changed' ? `${r.changed} Wert(e)`
+                 : r.status === 'ignored' ? 'keine BER-Datei — ignoriert'
                  : r.status === 'skipped' ? 'keine Regel getroffen'
                  : (r.error || 'Fehler');
       const line = document.createElement('div');
