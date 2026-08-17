@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const path = require('path');
 const fs   = require('fs');
+const batch = require('./batch');
 
 // Suppress harmless Chromium GPU-cache / disk-cache warnings on Windows
 // (Electron tries to move the cache to a locked temp dir — non-fatal)
@@ -1291,6 +1292,138 @@ ipcMain.handle('export-txt-fmt2', async (_, defaultPath, nodes) => {
     fs.writeFileSync(result.filePath, lines.join('\n') + '\n', 'utf8');
     return { ok: true, path: result.filePath };
   } catch(e) { return { ok: false, error: e.message }; }
+});
+
+// ── Batch-Bearbeitung (mehrere Dateien in einem Ordner) ───────────────────────
+
+// Reguläre Dateien eines Ordners auflisten (keine Unterordner, keine versteckten).
+function listBatchFiles(dir) {
+  return fs.readdirSync(dir, { withFileTypes: true })
+    .filter(d => d.isFile() && !d.name.startsWith('.'))
+    .map(d => d.name)
+    .sort();
+}
+
+// Ordner-Auswahldialog (Eingabe- bzw. Ausgabe-Ordner).
+ipcMain.handle('batch-choose-dir', async (_, title) => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: title || 'Ordner wählen',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (result.canceled || !result.filePaths.length) return null;
+  return result.filePaths[0];
+});
+
+// Ordner scannen: alle Dateien parsen und die editierbaren Zeit-/IP-Felder
+// sammeln (aggregiert über alle Dateien).
+ipcMain.handle('batch-scan', async (_, dir) => {
+  try {
+    if (!dir || !fs.existsSync(dir)) return { ok: false, error: 'Ordner nicht gefunden.' };
+    const names = listBatchFiles(dir);
+    const fieldMap = new Map();   // key → { name, kind, count, sample, files, order, tagLabel, typeName }
+    const parsed = [];            // erfolgreich geparste Dateien
+    const errors = [];            // { file, error }
+    let ignored = 0;              // Nicht-BER-Dateien (z.B. .txt, .zip)
+    for (const name of names) {
+      const full = path.join(dir, name);
+      try {
+        const buf = fs.readFileSync(full);
+        if (!looksLikeBer(buf)) { ignored++; continue; }   // keine BER-Datei → ignorieren
+        const typeHint = detectTypeHint(buf);
+        const nodes = parseBer(buf, 0, typeHint, tagMaps);
+        const fields = batch.collectFields(nodes);
+        if (!fields.length) continue;          // keine editierbaren Felder → uninteressant
+        parsed.push(name);
+        for (const f of fields) {
+          const key = f.name + '|' + f.kind;
+          if (!fieldMap.has(key)) fieldMap.set(key, {
+            name: f.name, kind: f.kind, count: 0, sample: f.sample, editValue: f.editValue || '', files: 0,
+            order: fieldMap.size, tagLabel: f.tagLabel || '', typeName: f.typeName || '',
+          });
+          const e = fieldMap.get(key);
+          e.count += f.count;
+          e.files += 1;
+        }
+      } catch (e) {
+        errors.push({ file: name, error: e.message });
+      }
+    }
+    // Reihenfolge = erstes Auftreten (BER-Dokumentreihenfolge), NICHT alphabetisch.
+    const fields = Array.from(fieldMap.values());
+    return { ok: true, dir, fileCount: names.length, parsedCount: parsed.length, ignored, fields, errors };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// Batch anwenden: gewähltes Feld in allen Dateien ändern und in den Ausgabe-Ordner
+// schreiben. Es können mehrere Regeln (Felder) auf einmal angewendet werden.
+// Dateien, in denen keine Regel greift, werden übersprungen (kein Fehler).
+// opts = { inputDir, outputDir, rules: [{ name, kind, delta?, value? }] }
+ipcMain.handle('batch-apply', async (_, opts) => {
+  try {
+    const { inputDir, outputDir } = opts || {};
+    const rules = Array.isArray(opts && opts.rules) ? opts.rules : [];
+    if (!inputDir || !fs.existsSync(inputDir)) return { ok: false, error: 'Eingabe-Ordner nicht gefunden.' };
+    if (!outputDir) return { ok: false, error: 'Kein Ausgabe-Ordner gewählt.' };
+    if (!rules.length) return { ok: false, error: 'Keine Änderung angegeben.' };
+
+    // Jede Regel in ein Auswahlobjekt für applyToTree übersetzen + validieren.
+    const sels = [];
+    for (const r of rules) {
+      if (!r || !r.name || !r.kind) return { ok: false, error: 'Regel ohne Feld/Art.' };
+      const sel = { name: r.name, kind: r.kind };
+      if (batch.TIME_KINDS.has(r.kind)) {
+        const deltaMs = batch.deltaToMs(r.delta || {});
+        if (!deltaMs) return { ok: false, error: `„${r.name}": Delta ist 0 — bitte einen Zeitversatz angeben.` };
+        sel.deltaMs = deltaMs;
+      } else if (batch.VALUE_KINDS.has(r.kind)) {
+        const enc = batch.encodeValueForKind(r.kind, r.value);
+        if (enc.error) return { ok: false, error: `„${r.name}": ${enc.error}` };
+        sel.setBytes = enc.bytes;
+      } else {
+        return { ok: false, error: `„${r.name}": unbekannte Feldart.` };
+      }
+      sels.push(sel);
+    }
+
+    // Ausgabe-Ordner anlegen; Überschreiben des Eingabe-Ordners verhindern.
+    if (path.resolve(inputDir) === path.resolve(outputDir))
+      return { ok: false, error: 'Ausgabe-Ordner muss sich vom Eingabe-Ordner unterscheiden.' };
+    fs.mkdirSync(outputDir, { recursive: true });
+
+    const report = [];   // { file, status, changed, error? }
+    const ruleTotals = sels.map(() => 0);
+    let changedFiles = 0, totalChanges = 0;
+    for (const fname of listBatchFiles(inputDir)) {
+      const full = path.join(inputDir, fname);
+      try {
+        const buf = fs.readFileSync(full);
+        if (!looksLikeBer(buf)) {                 // keine BER-Datei (z.B. .txt/.zip) → nie schreiben
+          report.push({ file: fname, status: 'ignored', changed: 0 });
+          continue;
+        }
+        const typeHint = detectTypeHint(buf);
+        const nodes = parseBer(buf, 0, typeHint, tagMaps);
+        const { total, perRule } = batch.applyRules(nodes, sels);
+        if (total === 0) {
+          report.push({ file: fname, status: 'skipped', changed: 0 });
+          continue;
+        }
+        const out = serializeNodes(nodes);
+        fs.writeFileSync(path.join(outputDir, fname), out);
+        perRule.forEach((n, i) => { ruleTotals[i] += n; });
+        report.push({ file: fname, status: 'changed', changed: total });
+        changedFiles++; totalChanges += total;
+      } catch (e) {
+        report.push({ file: fname, status: 'error', changed: 0, error: e.message });
+      }
+    }
+    const ruleSummary = sels.map((s, i) => ({ name: s.name, kind: s.kind, changed: ruleTotals[i] }));
+    return { ok: true, outputDir, changedFiles, totalChanges, ruleSummary, report };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 });
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────

@@ -1,12 +1,12 @@
 {
   "name": "ber-viewer",
-  "version": "1.5.60",
+  "version": "1.6.64",
   "description": "BER Editor  — ETSI LI PS-PDU / 3GPP Lawful Intercept",
   "author": "LI Tools",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node test/roundtrip.test.js",
+    "test": "node test/roundtrip.test.js && node test/batch.test.js",
     "build:win": "set CSC_IDENTITY_AUTO_DISCOVERY=false && electron-builder --win",
     "build:linux": "electron-builder --linux"
   },

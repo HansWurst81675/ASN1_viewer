@@ -596,3 +596,166 @@ button { cursor: pointer; border: none; outline: none; }
   transition: opacity 0.1s;
 }
 .cmp-row:hover .cmp-copy-btn { opacity: 1; }
+
+/* ── Batch-Dialog (Stapel-Bearbeitung mehrerer Dateien) ───────────────────── */
+#batch-dialog { position: fixed; inset: 0; z-index: 1200; }
+
+#batch-box {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 640px; max-width: 92vw;
+  max-height: 88vh; overflow-y: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.5);
+  display: flex; flex-direction: column; gap: 12px;
+}
+
+#batch-title { font-size: 14px; font-weight: bold; color: var(--accent); }
+#batch-subtitle { font-size: 11px; color: #c8cfdc; font-weight: normal; margin-left: 8px; }
+
+.batch-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.batch-info { font-size: 11px; color: #c8cfdc; word-break: break-all; }
+
+.batch-label { font-size: 12px; color: #c8cfdc; margin-bottom: 4px; }
+.batch-field-block { display: flex; flex-direction: column; }
+
+.batch-select {
+  width: 100%; padding: 6px 8px; font-size: 13px;
+  background: var(--bg-alt); color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px; outline: none;
+  font-family: inherit;
+}
+.batch-select:focus { border-color: var(--accent); }
+.batch-select:disabled { color: var(--text-dim); }
+
+.batch-op { display: flex; flex-direction: column; gap: 6px;
+  background: var(--bg-alt); border: 1px solid var(--border);
+  border-radius: 6px; padding: 12px; }
+
+.batch-delta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.batch-sign { width: auto; }
+.batch-unit { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text); }
+.batch-unit input {
+  width: 64px; padding: 5px 6px; font-size: 13px;
+  background: var(--bg); color: var(--green);
+  border: 1px solid var(--border); border-radius: 4px; outline: none; font-family: inherit;
+}
+.batch-unit input:focus { border-color: var(--accent); }
+
+.batch-hint { font-size: 11px; color: var(--text-muted); }
+
+.batch-btn {
+  padding: 6px 14px; background: var(--bg-alt);
+  border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text); font-family: inherit; font-size: 12px; cursor: pointer;
+}
+.batch-btn:hover:not(:disabled) { border-color: var(--accent); }
+.batch-btn:disabled { opacity: .45; cursor: default; }
+
+#batch-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.batch-cancel {
+  padding: 5px 16px; background: var(--bg-alt);
+  border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text); font-family: inherit; cursor: pointer;
+}
+.batch-cancel:hover { border-color: var(--text-dim); }
+.batch-ok {
+  padding: 5px 16px; background: var(--accent);
+  border: none; border-radius: 4px;
+  color: #fff; font-family: inherit; font-weight: bold; cursor: pointer;
+}
+.batch-ok:hover:not(:disabled) { background: #5aadff; }
+.batch-ok:disabled { opacity: .45; cursor: default; }
+
+.batch-error { color: var(--red, #e06c75); font-size: 11px; min-height: 14px; }
+
+.batch-report {
+  background: var(--bg-alt); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px; font-size: 12px;
+}
+.batch-report-head { font-weight: bold; color: var(--green); margin-bottom: 2px; }
+.batch-report-sub { font-size: 11px; color: var(--text-muted); word-break: break-all; margin-bottom: 6px; }
+.batch-report-list { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.batch-report-line { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.batch-report-line.ok   { color: var(--green); }
+.batch-report-line.skip { color: var(--text-muted); }
+.batch-report-line.fail { color: var(--red, #e06c75); }
+.batch-fail { color: var(--red, #e06c75); }
+
+/* ── Batch: Regel-Builder & Regelliste ────────────────────────────────────── */
+.batch-builder {
+  display: flex; flex-direction: column; gap: 8px;
+  background: var(--bg-alt); border: 1px solid var(--border);
+  border-radius: 6px; padding: 12px; margin-top: 4px;
+}
+.batch-builder-actions { display: flex; align-items: center; gap: 12px; }
+.batch-builder .batch-op { background: transparent; border: none; padding: 0; }
+
+.batch-rules { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.batch-rules-empty { font-size: 11px; color: var(--text-muted); font-style: italic; }
+.batch-rule {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 5px 10px;
+}
+.batch-rule-txt { font-size: 12px; color: var(--green); word-break: break-all; }
+.batch-rule-del {
+  flex: none; background: transparent; border: none; cursor: pointer;
+  color: var(--text-dim); font-size: 13px; padding: 0 4px; line-height: 1;
+}
+.batch-rule-del:hover { color: var(--red, #e06c75); }
+
+.batch-report-rules {
+  margin: 6px 0; padding: 6px 0; border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px;
+}
+
+/* ── Batch: durchsuchbare Feldliste ───────────────────────────────────────── */
+.batch-filter-row { display: flex; align-items: center; gap: 12px; }
+.batch-filter-row .batch-select { flex: 1; }
+.batch-check {
+  display: flex; align-items: center; gap: 5px; flex: none;
+  font-size: 12px; color: var(--text); white-space: nowrap; cursor: pointer;
+}
+.batch-listbox {
+  width: 100%; margin-top: 6px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px;
+  font-family: inherit; font-size: 12px; padding: 2px; outline: none;
+}
+.batch-listbox:focus { border-color: var(--accent); }
+.batch-listbox option { padding: 3px 6px; white-space: nowrap; }
+.batch-listbox option:checked { background: var(--sel-bg); color: var(--fg); }
+.batch-listbox:disabled { opacity: .5; }
+
+/* ── Batch: Feldliste als scrollbare Zeilen (Labels sichtbar) ──────────────── */
+.batch-check2 { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); }
+.batch-occ { width: auto; flex: none; }
+
+.batch-fieldlist {
+  margin-top: 6px; max-height: 240px; overflow-y: auto;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+}
+.batch-fld-row {
+  padding: 6px 8px; border-bottom: 1px solid var(--border); cursor: pointer;
+}
+.batch-fld-row:last-child { border-bottom: none; }
+.batch-fld-row:hover { background: var(--bg-alt); }
+.batch-fld-row.sel { background: var(--sel-bg); box-shadow: inset 2px 0 0 var(--accent); }
+.batch-fld-main { font-size: 12px; }
+.batch-fld-idx { color: var(--text-dim); font-size: 10px; }
+.batch-fld-name { color: var(--accent); font-weight: bold; }
+.batch-fld-meta { font-size: 11px; color: #c8cfdc; margin-top: 1px; }
+.batch-fld-sample { font-size: 11px; color: var(--green); margin-top: 1px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── Batch: Wert-Validierung ──────────────────────────────────────────────── */
+.batch-dim { color: var(--text-muted); font-weight: normal; }
+.batch-valstat { font-size: 11px; margin-top: 4px; min-height: 14px; font-family: inherit; }
+.batch-valstat.ok   { color: var(--green); }
+.batch-valstat.err  { color: var(--red, #e06c75); }
+.batch-valstat.warn { color: var(--yellow, #e5c07b); }

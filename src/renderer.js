@@ -287,6 +287,7 @@ document.getElementById('btn-collapse').addEventListener('click', collapseAll);
 document.getElementById('btn-search').addEventListener('click', searchNext);
 document.getElementById('btn-save').addEventListener('click', saveAs);
 document.getElementById('btn-export').addEventListener('click', exportTxt);
+document.getElementById('btn-batch').addEventListener('click', openBatchDialog);
 
 searchInput.addEventListener('keydown', e => { if(e.key==='Enter') searchNext(); });
 
@@ -2778,4 +2779,449 @@ function updateCompareStats() {
   statusLeft.textContent = total === 0
     ? '✓ Keine Unterschiede'
     : `Unterschiede: ${nVal} Wert  ${nStruct} Struktur  ${nLeft} nur links  ${nRight} nur rechts`;
+}
+
+
+// ── Batch-Bearbeitung: Dialog für mehrere Dateien in einem Ordner ─────────────
+const BATCH_KIND_LABEL = {
+  gtime:    'Zeit · GeneralizedTime',
+  utctime:  'Zeit · UTCTime',
+  unixtime: 'Zeit · Unix-Sekunden',
+  ipv4:     'IP-Adresse · IPv4',
+  ipv6:     'IP-Adresse · IPv6',
+  int:      'Zahl · INTEGER',
+  enum:     'Zahl · ENUMERATED',
+  bool:     'BOOLEAN',
+  string:   'Text',
+  hex:      'Rohbytes · Hex',
+};
+const BATCH_TIME_KINDS = new Set(['gtime', 'utctime', 'unixtime']);
+
+// Platzhalter/Hinweis je Wert-Feldart (Nicht-Zeit).
+function batchValueHint(kind) {
+  switch (kind) {
+    case 'ipv4':   return { ph: '192.168.0.1',  hint: 'IPv4-Adresse (4 Byte)' };
+    case 'ipv6':   return { ph: '2001:db8::1',  hint: 'IPv6-Adresse (16 Byte)' };
+    case 'int':    return { ph: '42 oder 0x2a', hint: 'Ganzzahl — dezimal oder 0x… (signed BER-INTEGER)' };
+    case 'enum':   return { ph: '1',            hint: 'ENUMERATED — Zahlenwert' };
+    case 'bool':   return { ph: 'TRUE',         hint: 'TRUE / FALSE (oder 1 / 0)' };
+    case 'hex':    return { ph: '30 31 32',     hint: 'Hex-Bytes (paarweise) — wird 1:1 gesetzt' };
+    default:       return { ph: 'Text',         hint: 'Text — wird als UTF-8 gespeichert' };
+  }
+}
+
+function openBatchDialog() {
+  const existing = document.getElementById('batch-dialog');
+  if (existing) existing.remove();
+
+  let inputDir = null;
+  let outputDir = null;
+  let fields = [];   // [{ name, kind, count, sample, files }]
+  const rules = [];  // [{ name, kind, delta?|value?, desc }]
+
+  const dlg = document.createElement('div');
+  dlg.id = 'batch-dialog';
+  dlg.innerHTML = `
+    <div id="edit-overlay"></div>
+    <div id="batch-box">
+      <div id="batch-title">⧉ Batch-Bearbeitung
+        <span id="batch-subtitle">mehrere Dateien in einem Ordner gemeinsam ändern</span>
+      </div>
+
+      <div class="batch-row">
+        <button id="batch-in-btn" class="batch-btn">1 · Eingabe-Ordner wählen …</button>
+        <span id="batch-in-info" class="batch-info">kein Ordner gewählt</span>
+      </div>
+
+      <div class="batch-field-block">
+        <label class="batch-label">2 · Änderungen zusammenstellen — pro Feld eine Regel hinzufügen</label>
+        <div class="batch-builder">
+          <div class="batch-filter-row">
+            <input id="batch-filter" class="batch-select" type="text" spellcheck="false"
+                   placeholder="Feld suchen — Name, Label oder Beispielwert …" disabled>
+            <label class="batch-check"><input type="checkbox" id="batch-only-ti"> nur Zeit / IP</label>
+          </div>
+          <div class="batch-filter-row">
+            <label class="batch-check2">Vorkommen:
+              <select id="batch-occ" class="batch-select batch-occ" disabled>
+                <option value="all">alle Felder</option>
+                <option value="multi">in mehr als 1 Datei</option>
+                <option value="every">in allen Dateien</option>
+              </select>
+            </label>
+          </div>
+          <div id="batch-field" class="batch-fieldlist"><div class="batch-hint" style="padding:8px">— zuerst Ordner scannen —</div></div>
+          <div id="batch-field-count" class="batch-hint"></div>
+          <div id="batch-op" class="batch-op hidden"></div>
+          <div class="batch-builder-actions">
+            <button id="batch-add" class="batch-btn" disabled>+ Regel hinzufügen</button>
+            <span id="batch-build-err" class="batch-error"></span>
+          </div>
+        </div>
+        <div id="batch-rules" class="batch-rules"></div>
+      </div>
+
+      <div class="batch-row">
+        <button id="batch-out-btn" class="batch-btn" disabled>3 · Ausgabe-Ordner wählen …</button>
+        <span id="batch-out-info" class="batch-info">kein Ordner gewählt</span>
+      </div>
+
+      <div id="batch-error" class="batch-error"></div>
+      <div id="batch-report" class="batch-report hidden"></div>
+
+      <div id="batch-buttons">
+        <button id="batch-close" class="batch-cancel">Schließen</button>
+        <button id="batch-apply" class="batch-ok" disabled>Anwenden</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(dlg);
+
+  const $ = (sel) => dlg.querySelector(sel);
+  const inInfo   = $('#batch-in-info');
+  const outInfo  = $('#batch-out-info');
+  const listEl   = $('#batch-field');
+  const filterInp= $('#batch-filter');
+  const onlyTi   = $('#batch-only-ti');
+  const occSel   = $('#batch-occ');
+  const fieldCnt = $('#batch-field-count');
+  const opBox    = $('#batch-op');
+  const addBtn   = $('#batch-add');
+  const buildErr = $('#batch-build-err');
+  const rulesBox = $('#batch-rules');
+  const errDiv   = $('#batch-error');
+  const reportDiv= $('#batch-report');
+  const outBtn   = $('#batch-out-btn');
+  const applyBtn = $('#batch-apply');
+
+  let parsedCount = 0;   // Anzahl Dateien mit Feldern (für „in allen Dateien")
+  let selIdx = -1;       // Index des gewählten Feldes in fields[]
+
+  const close = () => dlg.remove();
+  $('#batch-close').onclick = close;
+  $('#edit-overlay').onclick = close;
+  dlg.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+
+  const setErr = (m) => { errDiv.textContent = m || ''; };
+
+  function builderField() {
+    return selIdx >= 0 ? fields[selIdx] : null;
+  }
+
+  // Feldliste (scrollbare Zeilen) nach Suchtext, „nur Zeit/IP" und Vorkommen aufbauen.
+  // Reihenfolge = BER-Struktur (wie aus dem Scan geliefert).
+  function rebuildFieldList() {
+    const q = (filterInp.value || '').trim().toLowerCase();
+    const tiOnly = onlyTi.checked;
+    const occ = occSel.value;   // all | multi | every
+    listEl.innerHTML = '';
+    let shown = 0;
+    fields.forEach((f, i) => {
+      if (tiOnly && !(BATCH_TIME_KINDS.has(f.kind) || f.kind === 'ipv4' || f.kind === 'ipv6')) return;
+      if (occ === 'multi' && f.files <= 1) return;
+      if (occ === 'every' && f.files < parsedCount) return;
+      const label = BATCH_KIND_LABEL[f.kind] || f.kind;
+      const meta = `Tag ${f.tagLabel || '—'} · Typ ${f.typeName || '—'} · ${label} · in ${f.files}/${parsedCount} Dateien`;
+      const searchText = `${f.name} ${f.tagLabel} ${f.typeName} ${label} ${f.sample}`.toLowerCase();
+      if (q && !searchText.includes(q)) return;
+
+      const row = document.createElement('div');
+      row.className = 'batch-fld-row' + (i === selIdx ? ' sel' : '');
+      row.dataset.i = String(i);
+      row.title = `${f.name} — ${meta}\nz.B. ${f.sample}`;
+      const main = document.createElement('div');
+      main.className = 'batch-fld-main';
+      main.innerHTML = `<span class="batch-fld-idx">#${(f.order ?? i) + 1}</span> <span class="batch-fld-name"></span>`;
+      main.querySelector('.batch-fld-name').textContent = f.name;
+      const metaEl = document.createElement('div');
+      metaEl.className = 'batch-fld-meta';
+      metaEl.textContent = meta;
+      const smp = document.createElement('div');
+      smp.className = 'batch-fld-sample';
+      smp.textContent = 'z.B. ' + f.sample;
+      row.appendChild(main); row.appendChild(metaEl); row.appendChild(smp);
+      row.onclick = () => {
+        selIdx = i;
+        [...listEl.querySelectorAll('.batch-fld-row')].forEach(r => r.classList.toggle('sel', r.dataset.i === String(i)));
+        renderOp();
+      };
+      listEl.appendChild(row);
+      shown++;
+    });
+    if (!shown) {
+      const e = document.createElement('div');
+      e.className = 'batch-hint'; e.style.padding = '8px';
+      e.textContent = fields.length ? '— keine Treffer — Suche/Filter anpassen —' : '— keine editierbaren Felder —';
+      listEl.appendChild(e);
+    }
+    fieldCnt.textContent = fields.length
+      ? `${shown} von ${fields.length} Feldern · sortiert nach BER-Struktur`
+      : '';
+    renderOp();
+  }
+
+  // Operationsbereich je nach Feldart aufbauen (Zeit-Delta oder Wert-Eingabe).
+  function renderOp() {
+    const f = builderField();
+    opBox.classList.toggle('hidden', !f);
+    buildErr.textContent = '';
+    if (!f) { addBtn.disabled = true; return; }
+    if (BATCH_TIME_KINDS.has(f.kind)) {
+      opBox.innerHTML = `
+        <div class="batch-hint">Zeitversatz (Delta) — jeder Wert dieses Feldes wird verschoben:</div>
+        <div class="batch-delta">
+          <select id="batch-sign" class="batch-select batch-sign">
+            <option value="1">+ (später)</option>
+            <option value="-1">− (früher)</option>
+          </select>
+          <label class="batch-unit"><input id="batch-days"  type="number" min="0" value="0"> Tage</label>
+          <label class="batch-unit"><input id="batch-hours" type="number" min="0" value="0"> Std.</label>
+          <label class="batch-unit"><input id="batch-mins"  type="number" min="0" value="0"> Min.</label>
+          <label class="batch-unit"><input id="batch-secs"  type="number" min="0" value="0"> Sek.</label>
+        </div>`;
+    } else {
+      const { ph, hint } = batchValueHint(f.kind);
+      opBox.innerHTML = `
+        <div class="batch-hint">Fester Wert für alle Dateien — ${hint}
+          <span class="batch-dim">· vorbelegt mit dem aktuellen Wert der 1. Datei (markieren + kopieren möglich)</span>:</div>
+        <input id="batch-val" class="batch-select" type="text" spellcheck="false" placeholder="${ph}">
+        <div id="batch-val-status" class="batch-valstat"></div>`;
+      const inp = opBox.querySelector('#batch-val');
+      const status = opBox.querySelector('#batch-val-status');
+      inp.value = f.editValue != null ? f.editValue : '';   // Vorbelegung (nicht via innerHTML → keine Injektion)
+      const validateNow = () => {
+        buildErr.textContent = '';
+        const v = inp.value.trim();
+        if (!v) { status.textContent = '⚠ leer — bitte einen Wert eingeben'; status.className = 'batch-valstat warn'; return; }
+        const r = batchValidateValue(f.kind, v);
+        if (r.ok) {
+          status.textContent = `✓ gültig — ${r.bytes.length} Byte: ${hexShort(r.bytes)}`;
+          status.className = 'batch-valstat ok';
+        } else {
+          status.textContent = `✗ ${r.error}`;
+          status.className = 'batch-valstat err';
+        }
+      };
+      inp.addEventListener('input', validateNow);
+      validateNow();
+    }
+    if (BATCH_TIME_KINDS.has(f.kind)) {
+      opBox.querySelectorAll('input,select').forEach(el => el.addEventListener('input', () => { buildErr.textContent = ''; }));
+    }
+    addBtn.disabled = false;
+  }
+
+  // Kurzer Hex-Ausschnitt zur Bestätigung (max. 8 Byte).
+  function hexShort(bytes) {
+    const h = bytes.slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join(' ');
+    return bytes.length > 8 ? h + ' …' : h;
+  }
+
+  // Live-Validierung der Eingabe — spiegelt encodeValueForKind() aus batch.js.
+  // Gibt { ok:true, bytes } oder { error } zurück.
+  function batchValidateValue(kind, input) {
+    const s = String(input);
+    if (kind === 'ipv4' || kind === 'ipv6') {
+      const b = parseIpToBytes(s.trim());
+      if (!b) return { error: kind === 'ipv6'
+        ? 'Ungültige IPv6-Adresse — Doppelpunktnotation, z.B. 2001:db8::1'
+        : 'Ungültige IPv4-Adresse — Punktnotation mit „.", z.B. 127.0.0.1 (nicht „127 0 0 1")' };
+      const need = kind === 'ipv6' ? 16 : 4;
+      if (b.length !== need) return { error: `Es wird eine IPv${need === 16 ? 6 : 4}-Adresse (${need} Byte) erwartet` };
+      return { ok: true, bytes: b };
+    }
+    if (kind === 'int' || kind === 'enum') {
+      const c = s.trim();
+      let v;
+      try {
+        if (/^-?\d+$/.test(c)) v = BigInt(c);
+        else if (/^-?0x[0-9a-fA-F]+$/i.test(c)) v = c.startsWith('-') ? -BigInt(c.slice(1)) : BigInt(c);
+        else return { error: 'Ganzzahl erwartet — dezimal (z.B. 42) oder hex (0x2a)' };
+      } catch { return { error: 'Ungültige Zahl' }; }
+      if (kind === 'enum' && v < 0n) return { error: 'ENUMERATED muss ≥ 0 sein' };
+      return { ok: true, bytes: encodeBerInteger(v) };
+    }
+    if (kind === 'bool') {
+      const c = s.trim().toLowerCase();
+      if (['true', '1', 'ff', '0xff', 'wahr'].includes(c)) return { ok: true, bytes: [0xff] };
+      if (['false', '0', '00', '0x00', 'falsch'].includes(c)) return { ok: true, bytes: [0x00] };
+      return { error: 'TRUE oder FALSE (bzw. 1 / 0) erwartet' };
+    }
+    if (kind === 'hex') {
+      const h = s.replace(/\s+/g, '');
+      if (!/^[0-9a-fA-F]*$/.test(h) || h.length % 2 !== 0) return { error: 'Hex in Byte-Paaren, z.B. 30 31 32 oder 303132' };
+      const b = [];
+      for (let i = 0; i < h.length; i += 2) b.push(parseInt(h.slice(i, i + 2), 16));
+      return { ok: true, bytes: b };
+    }
+    return { ok: true, bytes: Array.from(new TextEncoder().encode(s)) };  // string
+  }
+
+  function readDelta() {
+    const g = (id) => Math.max(0, parseInt($(id)?.value || '0', 10) || 0);
+    return { sign: parseInt($('#batch-sign')?.value || '1', 10), days: g('#batch-days'),
+             hours: g('#batch-hours'), minutes: g('#batch-mins'), seconds: g('#batch-secs') };
+  }
+  function deltaZero(d) { return !(d.days || d.hours || d.minutes || d.seconds); }
+  function deltaDesc(d) {
+    const s = d.sign < 0 ? '−' : '+';
+    const parts = [];
+    if (d.days) parts.push(`${d.days}T`);
+    if (d.hours) parts.push(`${d.hours}h`);
+    if (d.minutes) parts.push(`${d.minutes}m`);
+    if (d.seconds) parts.push(`${d.seconds}s`);
+    return `${s}${parts.join(' ')}`;
+  }
+
+  function renderRules() {
+    rulesBox.innerHTML = '';
+    if (!rules.length) {
+      const e = document.createElement('div');
+      e.className = 'batch-rules-empty';
+      e.textContent = 'Noch keine Änderung hinzugefügt.';
+      rulesBox.appendChild(e);
+    } else {
+      rules.forEach((r, idx) => {
+        const row = document.createElement('div');
+        row.className = 'batch-rule';
+        const txt = document.createElement('span');
+        txt.className = 'batch-rule-txt';
+        txt.textContent = r.desc;
+        const del = document.createElement('button');
+        del.className = 'batch-rule-del';
+        del.textContent = '✕';
+        del.title = 'Regel entfernen';
+        del.onclick = () => { rules.splice(idx, 1); renderRules(); updateApplyState(); };
+        row.appendChild(txt); row.appendChild(del);
+        rulesBox.appendChild(row);
+      });
+    }
+    updateApplyState();
+  }
+
+  function updateApplyState() {
+    applyBtn.disabled = !(rules.length && inputDir && outputDir);
+  }
+
+  filterInp.addEventListener('input', rebuildFieldList);
+  onlyTi.addEventListener('change', rebuildFieldList);
+  occSel.addEventListener('change', rebuildFieldList);
+
+  // Regel aus dem Builder übernehmen.
+  addBtn.onclick = () => {
+    const f = builderField();
+    if (!f) return;
+    if (rules.some(r => r.name === f.name && r.kind === f.kind)) {
+      buildErr.textContent = 'Für dieses Feld gibt es bereits eine Regel.';
+      return;
+    }
+    if (BATCH_TIME_KINDS.has(f.kind)) {
+      const delta = readDelta();
+      if (deltaZero(delta)) { buildErr.textContent = 'Bitte einen Zeitversatz > 0 angeben.'; return; }
+      rules.push({ name: f.name, kind: f.kind, delta, desc: `${f.name}: ${deltaDesc(delta)}` });
+    } else {
+      const val = $('#batch-val')?.value.trim() ?? '';
+      if (!val) { buildErr.textContent = 'Bitte einen Wert angeben.'; return; }
+      const chk = batchValidateValue(f.kind, val);
+      if (!chk.ok) { buildErr.textContent = 'Ungültiger Wert: ' + chk.error; return; }
+      rules.push({ name: f.name, kind: f.kind, value: val, desc: `${f.name} = ${val}` });
+    }
+    buildErr.textContent = '';
+    selIdx = -1; rebuildFieldList();          // Builder zurücksetzen
+    renderRules();
+  };
+
+  // 1 · Eingabe-Ordner wählen und scannen.
+  $('#batch-in-btn').onclick = async () => {
+    setErr(''); reportDiv.classList.add('hidden');
+    const dir = await window.berApi.batchChooseDir('Eingabe-Ordner mit BER-Dateien wählen');
+    if (!dir) return;
+    inputDir = dir;
+    inInfo.textContent = 'scanne …';
+    const res = await window.berApi.batchScan(dir);
+    if (!res || !res.ok) { setErr(res?.error || 'Scan fehlgeschlagen.'); inInfo.textContent = dir; return; }
+    fields = res.fields;
+    parsedCount = res.parsedCount || 0;
+    selIdx = -1;
+    const ignoredTxt = res.ignored ? `, ${res.ignored} ignoriert (kein BER)` : '';
+    inInfo.textContent = `${dir}  —  ${res.fileCount} Dateien, ${parsedCount} mit Feldern${ignoredTxt}`;
+    const has = fields.length > 0;
+    filterInp.disabled = !has;
+    onlyTi.disabled = !has;
+    occSel.disabled = !has;
+    if (has) {
+      // Standard: sofort auf Zeit-/IP-Felder eindampfen, wenn es welche gibt
+      const hasTi = fields.some(f => BATCH_TIME_KINDS.has(f.kind) || f.kind === 'ipv4' || f.kind === 'ipv6');
+      onlyTi.checked = hasTi;
+      filterInp.value = '';
+      occSel.value = 'all';
+    }
+    rebuildFieldList();
+    outBtn.disabled = !has;
+    opBox.classList.add('hidden');
+    updateApplyState();
+  };
+
+  // 3 · Ausgabe-Ordner wählen.
+  outBtn.onclick = async () => {
+    setErr('');
+    const dir = await window.berApi.batchChooseDir('Ausgabe-Ordner wählen (nicht der Eingabe-Ordner)');
+    if (!dir) return;
+    outputDir = dir;
+    outInfo.textContent = dir;
+    updateApplyState();
+  };
+
+  // Anwenden.
+  applyBtn.onclick = async () => {
+    if (!rules.length) return;
+    setErr(''); reportDiv.classList.add('hidden');
+    const opts = { inputDir, outputDir, rules: rules.map(r => (
+      BATCH_TIME_KINDS.has(r.kind) ? { name: r.name, kind: r.kind, delta: r.delta }
+                                   : { name: r.name, kind: r.kind, value: r.value })) };
+
+    applyBtn.disabled = true; applyBtn.textContent = 'Verarbeite …';
+    const res = await window.berApi.batchApply(opts);
+    applyBtn.textContent = 'Anwenden'; updateApplyState();
+    if (!res || !res.ok) { setErr(res?.error || 'Batch fehlgeschlagen.'); return; }
+
+    const skipped = res.report.filter(r => r.status === 'skipped');
+    const ignored = res.report.filter(r => r.status === 'ignored');
+    const failed  = res.report.filter(r => r.status === 'error');
+    let html = `<div class="batch-report-head">✓ ${res.changedFiles} Datei(en) geändert `
+             + `(${res.totalChanges} Werte) · ${skipped.length} übersprungen`
+             + (ignored.length ? ` · ${ignored.length} ignoriert (kein BER)` : '')
+             + (failed.length ? ` · <span class="batch-fail">${failed.length} Fehler</span>` : '')
+             + `</div><div class="batch-report-sub">Ausgabe: ${res.outputDir}</div>`;
+    if (res.ruleSummary && res.ruleSummary.length) {
+      html += '<div class="batch-report-rules">';
+      for (const rs of res.ruleSummary) {
+        const line = document.createElement('div');
+        line.className = 'batch-report-line ' + (rs.changed ? 'ok' : 'skip');
+        line.textContent = `• ${rs.name}: ${rs.changed} Wert(e) geändert`;
+        html += line.outerHTML;
+      }
+      html += '</div>';
+    }
+    html += '<div class="batch-report-list">';
+    for (const r of res.report) {
+      const icon = r.status === 'changed' ? '✓' : r.status === 'error' ? '✗'
+                 : r.status === 'ignored' ? '∅' : '–';
+      const cls  = r.status === 'changed' ? 'ok' : r.status === 'error' ? 'fail' : 'skip';
+      const note = r.status === 'changed' ? `${r.changed} Wert(e)`
+                 : r.status === 'ignored' ? 'keine BER-Datei — ignoriert'
+                 : r.status === 'skipped' ? 'keine Regel getroffen'
+                 : (r.error || 'Fehler');
+      const line = document.createElement('div');
+      line.className = 'batch-report-line ' + cls;
+      line.textContent = `${icon} ${r.file} — ${note}`;
+      html += line.outerHTML;
+    }
+    html += '</div>';
+    reportDiv.innerHTML = html;
+    reportDiv.classList.remove('hidden');
+    statusLeft.textContent = `Batch: ${res.changedFiles} geändert, ${skipped.length} übersprungen`;
+  };
+
+  renderRules();
 }
