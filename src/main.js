@@ -400,6 +400,13 @@ function buildTagMaps(asn1Dir) {
     17: ['pTCChatGroupID',       'OCTET'],
   };
 
+  // IRITargetIdentifier SEQUENCE (element of IRIPayload.targetIdentifiers,
+  // TS33128Payloads_r17.asn: identifier[1]=TargetIdentifier CHOICE, provenance[2]=ENUMERATED)
+  maps['IRITargetIdentifier'] = {
+    1: ['identifier', 'TargetIdentifier'],
+    2: ['provenance', 'TargetIdentifierProvenance'],
+  };
+
   // LIAppliedDeliveryInformation SEQUENCE (per delivery destination)
   maps['LIAppliedDeliveryInformation'] = {
     1: ['hI2DeliveryIPAddress',   'IPAddress'],
@@ -728,6 +735,10 @@ const EXTRA_HINTS = {
   // 5G IRI chain
   'Payload,0':                  'iRIPayloadSEQ',
   'LIPSIRIPayload,2':           'IRIContents',
+  // targetIdentifiers [3] SEQUENCE OF IRITargetIdentifier — the "SEQUENCE OF" prefix
+  // makes the .asn auto-parser pick up the generic 'SEQUENCE' keyword as childType,
+  // which is nulled by GENERIC_TYPES and loses the typeHint for the list items below.
+  'LIPSIRIPayload,3':           'targetIdentifiersSEQ',
   'IRIContents,19':             'XIRIPayload',
   'XIRIPayload,2':              'XIRIEvent',
   // CC payload chain (4G messaging, VoIP)
@@ -909,6 +920,7 @@ function parseBer(buf, baseOffset, typeHint, tagMaps, depth) {
       else if(typeHint==='NSSAI')                  recurseHint='SNSSAI';
       else if(typeHint==='fiveGSTAIList')           recurseHint='TAI';
       else if(typeHint==='TAIList')                 recurseHint='TAI';
+      else if(typeHint==='targetIdentifiersSEQ')    recurseHint='IRITargetIdentifier';
       else if(childType)                            recurseHint=childType;
       else                                          recurseHint=typeHint;
     }else if(t.cls===0&&t.tag===17){

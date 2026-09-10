@@ -367,6 +367,13 @@ npm start
 > Versionsschema: `1.5.<Buildnummer>`. Die angezeigte Version stammt aus `app.getVersion()`
 > und damit aus der **root**-`package.json`.
 
+### v1.6.65 (2026-09-10)
+- **Label-Fix: `targetIdentifiers` (IRIPayload)** — In 5G-PS-PDU-Dateien wurden die Einträge der Liste `targetIdentifiers` (`IRIPayload[3]`, TS 33.128) nur generisch als `[1]`/`[2]`/`[4]` angezeigt, statt als `identifier`/`provenance`. Ursache: Der ASN.1-Auto-Parser liest bei `SEQUENCE OF`-Feldern das Schlüsselwort `SEQUENCE` als Typnamen (statt des eigentlichen Elementtyps `IRITargetIdentifier`); dieser generische Typ wird verworfen, wodurch der `typeHint` für die Listenelemente verloren ging und alle Kindfelder unlabeled blieben.
+  - Neue Map `IRITargetIdentifier` (`identifier[1]` → `TargetIdentifier`-CHOICE, `provenance[2]` → `TargetIdentifierProvenance`-ENUMERATED, wird automatisch aus dem Schema aufgelöst).
+  - Neuer `EXTRA_HINTS`-Eintrag `LIPSIRIPayload,3 → targetIdentifiersSEQ` plus Passthrough auf `IRITargetIdentifier`, analog zum bestehenden `fiveGSTAIList`/`TAIList`-Muster.
+  - Betrifft nur `src/main.js` (Typ-Maps/Parsing); `src/renderer.js` unverändert.
+  - Geprüft: Die hochgeladene `_modified.hi2`-Testdatei parst vollständig konsistent (rekursiver Byte-für-Byte-Check, keine Längen-/Puffer-Fehler) — das gemeldete Anzeigeproblem war ausschließlich der fehlende Typ-Hint, keine Dateikorruption.
+
 ### v1.6.0 (2026-08-13)
 Schwerpunkt: **Batch-Bearbeitung** — beliebige Felder in allen Dateien eines Ordners auf einmal ändern.
 
