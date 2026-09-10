@@ -122,6 +122,16 @@ function buildTagMaps(asn1Dir) {
     19:['threeGPP33128DefinedIRI','XIRIPayload'], 20:['iPIRIPacketReport','IPIRIPacketReport'],
   };
 
+  // XIRIPayload (TS33128Payloads_r17.asn) is auto-loaded with only 2 fields
+  // (xIRIPayloadOID[1], event[2]) — real X2/X3 payloads observed in the wild also
+  // carry targetIdentifiers[3] (SEQUENCE OF IRITargetIdentifier) and mediatedFromIndicator[4],
+  // matching the sibling IRIPayload type. Patch these in manually since the schema
+  // file itself doesn't declare them on XIRIPayload.
+  if (maps['XIRIPayload']) {
+    maps['XIRIPayload'][3] = ['targetIdentifiers', 'targetIdentifiersSEQ'];
+    maps['XIRIPayload'][4] = ['mediatedFromIndicator', 'MediatedFromIndicator'];
+  }
+
   // Virtual types for inline SEQUENCE bodies that share a common tag number
   // across multiple ASN.1 versions (EPS, UMTS, HI2)
   maps['EpsPartyIdentity'] = {
@@ -735,10 +745,6 @@ const EXTRA_HINTS = {
   // 5G IRI chain
   'Payload,0':                  'iRIPayloadSEQ',
   'LIPSIRIPayload,2':           'IRIContents',
-  // targetIdentifiers [3] SEQUENCE OF IRITargetIdentifier — the "SEQUENCE OF" prefix
-  // makes the .asn auto-parser pick up the generic 'SEQUENCE' keyword as childType,
-  // which is nulled by GENERIC_TYPES and loses the typeHint for the list items below.
-  'LIPSIRIPayload,3':           'targetIdentifiersSEQ',
   'IRIContents,19':             'XIRIPayload',
   'XIRIPayload,2':              'XIRIEvent',
   // CC payload chain (4G messaging, VoIP)
