@@ -367,6 +367,13 @@ npm start
 > Versionsschema: `1.5.<Buildnummer>`. Die angezeigte Version stammt aus `app.getVersion()`
 > und damit aus der **root**-`package.json`.
 
+### v1.6.65 (2026-09-10)
+- **Label-Fix: `targetIdentifiers` in `XIRIPayload` (5G X2/X3, TS 33.128)** — In 5G-PS-PDU-Dateien wurden die Einträge der Liste `targetIdentifiers` (erreicht über `IRIContents[19] threeGPP33128DefinedIRI` → `XIRIPayload`) nur generisch als `[1]`/`[2]`/`[4]`/`CONSTRUCTED` angezeigt, statt als `identifier`/`provenance` mit aufgelöstem `iMEI`/`iMSI`/`mSISDN`. Ursache: `XIRIPayload` ist in `TS33128Payloads_r17.asn` nur mit den Feldern `xIRIPayloadOID[1]`/`event[2]` definiert; `targetIdentifiers[3]` (SEQUENCE OF `IRITargetIdentifier`) und `mediatedFromIndicator[4]` fehlten dort, kommen in der Praxis aber vor.
+  - `maps['XIRIPayload']` wird nach dem Schema-Laden manuell um Feld `3`/`4` ergänzt.
+  - Neue Map `IRITargetIdentifier` (`identifier[1]` → `TargetIdentifier`-CHOICE, `provenance[2]` → `TargetIdentifierProvenance`-ENUMERATED, wird automatisch aus dem Schema aufgelöst).
+  - Betrifft nur `src/main.js`; `src/renderer.js` unverändert.
+  - **Geprüft per Testlauf** gegen eine reale 5G-PS-PDU-Testdatei (Node-Harness, echte Parser-Funktionen, kein Hand-Tracing): alle vier `targetIdentifiers`-Einträge lösen jetzt korrekt zu `identifier`(iMEI/iMSI/mSISDN)/`provenance`(lEAProvided/observed) auf.
+
 ### v1.6.0 (2026-08-13)
 Schwerpunkt: **Batch-Bearbeitung** — beliebige Felder in allen Dateien eines Ordners auf einmal ändern.
 

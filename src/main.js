@@ -122,6 +122,16 @@ function buildTagMaps(asn1Dir) {
     19:['threeGPP33128DefinedIRI','XIRIPayload'], 20:['iPIRIPacketReport','IPIRIPacketReport'],
   };
 
+  // XIRIPayload (TS33128Payloads_r17.asn) is auto-loaded with only 2 fields
+  // (xIRIPayloadOID[1], event[2]) — real X2/X3 payloads observed in the wild also
+  // carry targetIdentifiers[3] (SEQUENCE OF IRITargetIdentifier) and mediatedFromIndicator[4],
+  // matching the sibling IRIPayload type. Patch these in manually since the schema
+  // file itself doesn't declare them on XIRIPayload.
+  if (maps['XIRIPayload']) {
+    maps['XIRIPayload'][3] = ['targetIdentifiers', 'targetIdentifiersSEQ'];
+    maps['XIRIPayload'][4] = ['mediatedFromIndicator', 'MediatedFromIndicator'];
+  }
+
   // Virtual types for inline SEQUENCE bodies that share a common tag number
   // across multiple ASN.1 versions (EPS, UMTS, HI2)
   maps['EpsPartyIdentity'] = {
@@ -398,6 +408,13 @@ function buildTagMaps(asn1Dir) {
     15: ['mCPTTID',              'UTF8String'],
     16: ['instanceIdentifierURN','UTF8String'],
     17: ['pTCChatGroupID',       'OCTET'],
+  };
+
+  // IRITargetIdentifier SEQUENCE (element of IRIPayload.targetIdentifiers,
+  // TS33128Payloads_r17.asn: identifier[1]=TargetIdentifier CHOICE, provenance[2]=ENUMERATED)
+  maps['IRITargetIdentifier'] = {
+    1: ['identifier', 'TargetIdentifier'],
+    2: ['provenance', 'TargetIdentifierProvenance'],
   };
 
   // LIAppliedDeliveryInformation SEQUENCE (per delivery destination)
@@ -909,6 +926,7 @@ function parseBer(buf, baseOffset, typeHint, tagMaps, depth) {
       else if(typeHint==='NSSAI')                  recurseHint='SNSSAI';
       else if(typeHint==='fiveGSTAIList')           recurseHint='TAI';
       else if(typeHint==='TAIList')                 recurseHint='TAI';
+      else if(typeHint==='targetIdentifiersSEQ')    recurseHint='IRITargetIdentifier';
       else if(childType)                            recurseHint=childType;
       else                                          recurseHint=typeHint;
     }else if(t.cls===0&&t.tag===17){
