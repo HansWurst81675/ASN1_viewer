@@ -45,12 +45,15 @@ function specFromOid(oid) {
     const domain=p[5], sub=p[6], rel=p[7], ver=p[8];
     if (domain === '5') {
       // ETSI TS 102 232 series — 0.4.0.2.2.5.[sub].[version]
-      // version byte: e.g. 24="v2.4", 29="v2.9", 36="v3.6", 40="v4.0"
       const specMap = {'1':'ETSI TS 102 232-1','2':'ETSI TS 102 232-2',
         '3':'ETSI TS 102 232-3','5':'ETSI TS 102 232-5','6':'ETSI TS 102 232-6'};
       const spec = specMap[sub] || `ETSI TS 102 232 (li-ps/${sub})`;
-      const vn = Number(rel);  // rel = p[7] = version byte
-      const vstr = rel ? ` v${Math.floor(vn/10)}.${vn%10}` : '';
+      // p[7] is the ASN.1 module version arc (genHeader version<n>), a plain
+      // counter — NOT a dotted document version. Splitting the digits would
+      // render the module version40(40) shipped in asn1_patched/LI-PS-PDU.asn
+      // as "v4.0", while the newest published TS 102 232-1 is V3.38.1. Show the
+      // arc verbatim and leave the document version out of it.
+      const vstr = rel ? ` (ASN.1 v${rel})` : '';
       return `${spec}${vstr}`;
     }
     if (domain === '4') {
@@ -90,6 +93,11 @@ function countNodes(nodes) {
 // time, which is exactly what happens under EN-DC (5G NSA). We use that as the
 // signal: NR-only → SA, NR+E-UTRA together (or elsewhere in the file) → NSA,
 // E-UTRA/EPS only (no 5G-Core artifacts at all) → LTE.
+//
+// EN-DC intercepted at the MME does not produce an nRLocation at all: the event
+// is MMEAttach/MMEDetach/… with an eUTRALocation, and the NR leg only shows up
+// as an extra NG-RAN cell identity (NCGI) somewhere in the Location — typically
+// LocationInfo.additionalCellIDs → rANCGI → nCGI. Both are checked below.
 function detectAccessType(nodes) {
   let hasNR = false, hasEutra = false;
 
@@ -99,8 +107,16 @@ function detectAccessType(nodes) {
       if (n.fieldName === 'eUTRALocation' || n.typeName === 'EUTRALocation') hasEutra = true;
       // 5G-Core signalling markers (AMF registration/dereg/location-update, 5G-GUTI)
       if (n.typeName === 'FiveGGUTI' || (n.typeName && /^AMF/.test(n.typeName))) hasNR = true;
+      // NG-RAN cell identity anywhere in the record. Under EN-DC the MME event
+      // (MMEAttach & co.) is a plain EPS event — TS 33.128 r17 has no NSA/EN-DC
+      // marker of its own — so the NR secondary cell reported alongside the
+      // E-UTRA anchor, e.g. in LocationInfo.additionalCellIDs → rANCGI → nCGI,
+      // is the only thing that distinguishes 5G NSA from plain LTE.
+      if (n.fieldName === 'nCGI' || n.typeName === 'NCGI' || n.typeName === 'NRCellID') hasNR = true;
       // Legacy EPS/4G markers (TS 29.274 EPSLocation, EPS PS-PDU userLocationInfo)
       if (n.fieldName === 'epsLocation' || n.typeName === 'EPSLocation') hasEutra = true;
+      // EPS/MME signalling markers (MMEAttach, MMEDetach, MMELocationUpdate, GUTI parts)
+      if (n.typeName && /^MME/.test(n.typeName)) hasEutra = true;
       if (n.children && n.children.length) scan(n.children);
     }
   })(nodes);
