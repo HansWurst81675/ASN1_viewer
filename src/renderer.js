@@ -18,6 +18,7 @@ const splitterCont = document.getElementById('splitter-container');
 const treeBody     = document.getElementById('tree-body');
 const fileInfo     = document.getElementById('file-info');
 const statusLeft   = document.getElementById('status-left');
+const accessBadge  = document.getElementById('access-badge');
 const statusRight  = document.getElementById('status-right');
 const searchInput  = document.getElementById('search-input');
 const treePanel    = document.getElementById('tree-panel');
@@ -82,6 +83,34 @@ function countNodes(nodes) {
   return nodes.reduce((s, n) => s + 1 + countNodes(n.children), 0);
 }
 
+// ── Access-type detection (LTE / 5G SA / 5G NSA) ───────────────────────────────
+// TS 29.571 / TS 33.128 UserLocation is a SEQUENCE with eUTRALocation[1] and
+// nRLocation[2] BOTH declared OPTIONAL — i.e. the schema itself allows a single
+// UserLocation to carry an LTE anchor cell and an NR secondary cell at the same
+// time, which is exactly what happens under EN-DC (5G NSA). We use that as the
+// signal: NR-only → SA, NR+E-UTRA together (or elsewhere in the file) → NSA,
+// E-UTRA/EPS only (no 5G-Core artifacts at all) → LTE.
+function detectAccessType(nodes) {
+  let hasNR = false, hasEutra = false;
+
+  (function scan(list) {
+    for (const n of list) {
+      if (n.fieldName === 'nRLocation' || n.typeName === 'NRLocation') hasNR = true;
+      if (n.fieldName === 'eUTRALocation' || n.typeName === 'EUTRALocation') hasEutra = true;
+      // 5G-Core signalling markers (AMF registration/dereg/location-update, 5G-GUTI)
+      if (n.typeName === 'FiveGGUTI' || (n.typeName && /^AMF/.test(n.typeName))) hasNR = true;
+      // Legacy EPS/4G markers (TS 29.274 EPSLocation, EPS PS-PDU userLocationInfo)
+      if (n.fieldName === 'epsLocation' || n.typeName === 'EPSLocation') hasEutra = true;
+      if (n.children && n.children.length) scan(n.children);
+    }
+  })(nodes);
+
+  if (hasNR && hasEutra) return { label: '5G NSA', cls: 'nsa' };
+  if (hasNR)             return { label: '5G SA',  cls: 'sa'  };
+  if (hasEutra)           return { label: 'LTE',    cls: 'lte' };
+  return null;
+}
+
 // ── File loading ──────────────────────────────────────────────────────────────
 window.berApi.onFileLoaded(data => {
   if(!data.nodes||data.nodes.length===0){ statusLeft.textContent=`Error: no nodes`; return; }
@@ -121,6 +150,9 @@ window.berApi.onFileLoaded(data => {
   // Detect spec from embedded domain OID and update right status
   const domainOid = findDomainOid(data.nodes);
   const spec = specFromOid(domainOid);
+  const accessType = detectAccessType(data.nodes);
+  accessBadge.textContent = accessType ? accessType.label : '';
+  accessBadge.className = accessType ? `access-badge ${accessType.cls}` : 'access-badge hidden';
   window.berApi.getSchemaInfo().then(info => {
     const typeStr = info.typeCount > 0 ? `Schema: ${info.typeCount} types` : 'Schema: not loaded';
     const verStr  = info.version ? `v${info.version}` : '';
