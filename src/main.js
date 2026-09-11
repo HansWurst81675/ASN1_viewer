@@ -49,6 +49,18 @@ function buildTagMaps(asn1Dir) {
   const fieldRe = /\b([a-z][A-Za-z0-9-]*)\s+\[(\d+)\]\s+(?:IMPLICIT\s+|OPTIONAL\s+)?([A-Z][A-Za-z0-9-]*)/;
   // Extracts SIZE (min..max) or SIZE (exact) and integer value range (min..max) from a field line.
   // Returns { min, max } or null.
+  // "SEQUENCE OF <Type>" / "SET OF <Type>" (with or without a SIZE clause) is
+  // reported by fieldRe as the bare keyword "SEQUENCE", which lands in
+  // GENERIC_TYPES and kills the child type — every element below such a field
+  // then shows up as an anonymous [n]. Keep the element type instead; parseBer
+  // strips the "SEQUENCE OF " prefix when it recurses into the elements.
+  // Affects e.g. LocationInfo.additionalCellIDs, EPSLocation.additionalCellIDs
+  // and IRIPayload.targetIdentifiers.
+  function refineType(line, type) {
+    const om = line.match(/\b(?:SEQUENCE|SET)\s*(?:SIZE\s*\([^)]*\)\s*)?OF\s+([A-Z][A-Za-z0-9-]*)/);
+    return om ? `SEQUENCE OF ${om[1]}` : type;
+  }
+
   function extractConstraint(line) {
     // SIZE (min..max) or SIZE(min..max)
     let m = line.match(/SIZE\s*\(\s*(\d+)\s*\.\.\s*(\d+)\s*\)/);
@@ -85,7 +97,7 @@ function buildTagMaps(asn1Dir) {
           if (d === 0) {  // emit line before entering block
             const line = body.slice(lineStart, j).replace(/--.*/, '');
             const fm = fieldRe.exec(line);
-            if (fm) { const c = extractConstraint(line); tmap[parseInt(fm[2])] = c ? [fm[1], fm[3], c] : [fm[1], fm[3]]; }
+            if (fm) { const c = extractConstraint(line); const ty = refineType(line, fm[3]); tmap[parseInt(fm[2])] = c ? [fm[1], ty, c] : [fm[1], ty]; }
           }
           d++; lineStart = j + 1; continue;
         }
@@ -97,7 +109,7 @@ function buildTagMaps(asn1Dir) {
         if ((ch === '\n' || ch === null) && d === 0) {
           const line = body.slice(lineStart, j).replace(/--.*/, '');
           const fm = fieldRe.exec(line);
-          if (fm) { const c = extractConstraint(line); tmap[parseInt(fm[2])] = c ? [fm[1], fm[3], c] : [fm[1], fm[3]]; }
+          if (fm) { const c = extractConstraint(line); const ty = refineType(line, fm[3]); tmap[parseInt(fm[2])] = c ? [fm[1], ty, c] : [fm[1], ty]; }
           lineStart = j + 1;
         }
       }
@@ -927,6 +939,9 @@ function parseBer(buf, baseOffset, typeHint, tagMaps, depth) {
       else if(typeHint==='fiveGSTAIList')           recurseHint='TAI';
       else if(typeHint==='TAIList')                 recurseHint='TAI';
       else if(typeHint==='targetIdentifiersSEQ')    recurseHint='IRITargetIdentifier';
+      // Generic "SEQUENCE OF <Type>" from the schema (see refineType above)
+      else if(typeHint && typeHint.startsWith('SEQUENCE OF '))
+                                                    recurseHint=typeHint.slice(12);
       else if(childType)                            recurseHint=childType;
       else                                          recurseHint=typeHint;
     }else if(t.cls===0&&t.tag===17){
