@@ -367,6 +367,18 @@ npm start
 > Versionsschema: `1.5.<Buildnummer>`. Die angezeigte Version stammt aus `app.getVersion()`
 > und damit aus der **root**-`package.json`.
 
+### v1.6.67 (2026-09-11)
+- **Fix: Fehlender Trenner links von der Spec-Anzeige** — bei ausgeblendetem Access-Type-Badge (kein LTE/SA/NSA erkannt, z. B. `ETSI TS 102 232-1`-Dateien) oder bei langem Dateinamen/schmalem Fenster stießen `status-left` und `status-right` direkt aneinander (`...58 fieldsETSI TS...`), weil der Abstand bisher nur über `justify-content: space-between` mit übrigem Platz zustande kam. Jetzt fester `gap: 10px` auf `#statusbar`, `status-left` kürzt bei Platzmangel mit `…` (`text-overflow: ellipsis`) statt den Trenner zu verschlucken. Nur `src/style.css` betroffen.
+
+### v1.6.66 (2026-09-11)
+- **Neu: Access-Type-Badge in der Statuszeile (LTE / 5G SA / 5G NSA)** — links von der Spec-Anzeige (`ETSI TS ...` / `3GPP TS ...`) erscheint jetzt ein farblich abgesetztes Badge:
+  - <span style="color:#56b6c2">**5G SA**</span> (grün) — `nRLocation`/5G-Core-Marker (`FiveGGUTI`, `AMFRegistration`/`AMFDeregistration`/...) gefunden, kein E-UTRA-Anker.
+  - **5G NSA** (gelb) — `nRLocation` **und** `eUTRALocation`/EPS-Marker gleichzeitig gefunden (Dual-Connectivity/EN-DC).
+  - **LTE** (blau) — nur `eUTRALocation`/`EPSLocation`/EPS-`userLocationInfo`, keine 5G-Core-Artefakte.
+  - Erkennung nutzt aus, dass `UserLocation` (TS 29.571/33.128) `eUTRALocation[1]` und `nRLocation[2]` beide als OPTIONAL deklariert — beide gleichzeitig belegt ist das Schema-Signal für EN-DC.
+  - Betrifft `src/renderer.js` (Erkennung + Statuszeilen-Update), `src/index.html` (neues `#access-badge`-Element), `src/style.css` (Badge-Styling).
+  - ⚠️ Heuristik bisher nur gegen echte 5G-SA-Dateien verifiziert; für NSA-Fall bitte mit einer echten EN-DC-Testdatei gegenprüfen, da mir keine vorliegt.
+
 ### v1.6.65 (2026-09-10)
 - **Label-Fix: `targetIdentifiers` in `XIRIPayload` (5G X2/X3, TS 33.128)** — In 5G-PS-PDU-Dateien wurden die Einträge der Liste `targetIdentifiers` (erreicht über `IRIContents[19] threeGPP33128DefinedIRI` → `XIRIPayload`) nur generisch als `[1]`/`[2]`/`[4]`/`CONSTRUCTED` angezeigt, statt als `identifier`/`provenance` mit aufgelöstem `iMEI`/`iMSI`/`mSISDN`. Ursache: `XIRIPayload` ist in `TS33128Payloads_r17.asn` nur mit den Feldern `xIRIPayloadOID[1]`/`event[2]` definiert; `targetIdentifiers[3]` (SEQUENCE OF `IRITargetIdentifier`) und `mediatedFromIndicator[4]` fehlten dort, kommen in der Praxis aber vor.
   - `maps['XIRIPayload']` wird nach dem Schema-Laden manuell um Feld `3`/`4` ergänzt.
